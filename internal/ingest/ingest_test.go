@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"ebook-vocab/internal/db"
+	"ebook-vocab/internal/dictionary"
 	"ebook-vocab/internal/ingest"
 )
 
@@ -208,4 +209,126 @@ func TestSameSizeDifferentContentBothImported(t *testing.T) {
 		t.Fatalf("expected both same-size distinct books to be imported, got %+v", summary)
 	}
 }
+
+func TestIngestExtractsLearnableLexemesAndFiltersNoise(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := db.Open(filepath.Join(tempDir, "vocab.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer store.Close()
+
+	fixtureDict := dictionary.NewFixture(
+		[]dictionary.FixtureEntry{
+			{
+				Lemma:          "walk",
+				POS:            dictionary.POSVerb,
+				CEFRLevel:      "a1",
+				GlobalZipfFreq: 5.4,
+				Senses: []dictionary.Sense{
+					{Definition: "Move at a regular pace by lifting and setting down each foot", ShortDefinitions: []string{"stroll"}},
+				},
+			},
+			{
+				Lemma:          "house",
+				POS:            dictionary.POSNoun,
+				CEFRLevel:      "a1",
+				GlobalZipfFreq: 5.8,
+				Senses: []dictionary.Sense{
+					{Definition: "A building for human habitation", ShortDefinitions: []string{"dwelling"}},
+				},
+			},
+			{
+				Lemma:          "laconic",
+				POS:            dictionary.POSAdjective,
+				CEFRLevel:      "c1",
+				GlobalZipfFreq: 2.2,
+				Senses: []dictionary.Sense{
+					{
+						Definition:       "Using very few words",
+						ShortDefinitions: []string{"concise", "terse"},
+						TranslationsLT:   []string{"lakoniškas", "glaustas"},
+					},
+				},
+			},
+			{
+				Lemma:          "obfuscate",
+				POS:            dictionary.POSVerb,
+				CEFRLevel:      "",
+				GlobalZipfFreq: 1.8,
+				Senses: []dictionary.Sense{
+					{
+						Definition:       "Render obscure, unclear, or unintelligible",
+						ShortDefinitions: []string{"obscure", "confuse"},
+						TranslationsLT:   []string{},
+					},
+				},
+			},
+			{
+				Lemma:          "conundrum",
+				POS:            dictionary.POSNoun,
+				CEFRLevel:      "",
+				GlobalZipfFreq: 2.5,
+				Senses: []dictionary.Sense{
+					{
+						Definition:       "A confusing and difficult problem or question",
+						ShortDefinitions: []string{"riddle", "enigma"},
+						TranslationsLT:   []string{"mįslė", "galvosūkis"},
+					},
+				},
+			},
+		},
+		map[string]string{
+			"walked":     "walk",
+			"obfuscated": "obfuscate",
+			"conundrums": "conundrum",
+		},
+	)
+
+	text := "Magnus walked into the house in 1984. His laconic reply obfuscated the conundrums, and he obfuscated xyzzyspoon again."
+	epubPath := createTestEPUB(t, tempDir, "spy.epub", "A Perfect Spy", "John le Carré", text)
+
+	var out bytes.Buffer
+	summary, err := ingest.RunTUI(store, []string{epubPath}, &out, ingest.WithDictionary(fixtureDict))
+	if err != nil {
+		t.Fatalf("ingest.RunTUI failed: %v", err)
+	}
+	if summary.Imported != 1 {
+		t.Fatalf("expected Imported=1, got %+v", summary)
+	}
+	if summary.Files[0].LexemeCount != 3 {
+		t.Fatalf("expected LexemeCount=3 (laconic, obfuscate, conundrum), got %d", summary.Files[0].LexemeCount)
+	}
+	if !strings.Contains(out.String(), "[3 lexemes]") {
+		t.Errorf("expected TUI summary output to include '[3 lexemes]', got:\n%s", out.String())
+	}
+
+	books, err := store.ListBooks()
+	if err != nil {
+		t.Fatalf("store.ListBooks: %v", err)
+	}
+	if len(books) != 1 || books[0].TotalLexemes != 3 {
+		t.Fatalf("expected 1 book with TotalLexemes=3, got %+v", books)
+	}
+
+	vocab, err := store.ListBookVocabulary(books[0].ID, db.VocabularyFilter{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("store.ListBookVocabulary: %v", err)
+	}
+	if len(vocab.Items) != 3 {
+		t.Fatalf("expected 3 vocabulary items, got %d", len(vocab.Items))
+	}
+
+	// obfuscate has lowest zipf (1.8 -> rarity 3.2) and highest occurrences (2 -> salience ln(3))
+	if vocab.Items[0].Lemma != "obfuscate" || vocab.Items[0].PromptForm != "to obfuscate" || vocab.Items[0].OccurrenceCount != 2 {
+		t.Errorf("expected top item to be 'to obfuscate' with count=2, got %+v", vocab.Items[0])
+	}
+	if vocab.Items[1].Lemma != "laconic" || vocab.Items[1].PromptForm != "laconic (adj.)" || vocab.Items[1].OccurrenceCount != 1 {
+		t.Errorf("expected second item to be 'laconic (adj.)' with count=1, got %+v", vocab.Items[1])
+	}
+	if vocab.Items[2].Lemma != "conundrum" || vocab.Items[2].PromptForm != "a conundrum" || vocab.Items[2].OccurrenceCount != 1 {
+		t.Errorf("expected third item to be 'a conundrum' with count=1, got %+v", vocab.Items[2])
+	}
+}
+
 

@@ -2,10 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 
 	"ebook-vocab/internal/db"
@@ -24,6 +26,8 @@ func NewHandler(store *db.Store, spaFS fs.FS) http.Handler {
 		mux:   http.NewServeMux(),
 	}
 	s.mux.HandleFunc("GET /api/books", s.handleListBooks)
+	s.mux.HandleFunc("GET /api/books/{id}", s.handleGetBook)
+	s.mux.HandleFunc("GET /api/books/{id}/vocabulary", s.handleGetBookVocabulary)
 	s.mux.HandleFunc("/", s.handleSPA)
 	return s.mux
 }
@@ -38,6 +42,66 @@ func (s *Server) handleListBooks(w http.ResponseWriter, r *http.Request) {
 		"books": books,
 	})
 }
+
+func (s *Server) handleGetBook(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid book id")
+		return
+	}
+	book, err := s.store.GetBook(id)
+	if errors.Is(err, db.ErrBookNotFound) {
+		writeJSONError(w, http.StatusNotFound, "book not found")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"book": book,
+	})
+}
+
+func (s *Server) handleGetBookVocabulary(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid book id")
+		return
+	}
+
+	q := r.URL.Query()
+	page := 1
+	if pStr := q.Get("page"); pStr != "" {
+		if parsed, parseErr := strconv.Atoi(pStr); parseErr == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	pageSize := 50
+	if psStr := q.Get("page_size"); psStr != "" {
+		if parsed, parseErr := strconv.Atoi(psStr); parseErr == nil && parsed > 0 {
+			pageSize = parsed
+		}
+	}
+
+	vocabPage, err := s.store.ListBookVocabulary(id, db.VocabularyFilter{
+		Page:     page,
+		PageSize: pageSize,
+		POS:      q.Get("pos"),
+		Search:   q.Get("search"),
+	})
+	if errors.Is(err, db.ErrBookNotFound) {
+		writeJSONError(w, http.StatusNotFound, "book not found")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, vocabPage)
+}
+
 
 func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/api/") {

@@ -2,11 +2,16 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
+
+var ErrBookNotFound = errors.New("book not found")
+
 
 type Book struct {
 	ID            int64          `json:"id"`
@@ -29,6 +34,56 @@ type BookInput struct {
 	FileSize int64
 	SHA256   string
 }
+
+type LexemeInput struct {
+	Lemma            string
+	POS              string
+	PromptForm       string
+	CEFRLevel        string
+	GlobalZipfFreq   float64
+	FullDefinition   string
+	ShortDefinitions []string
+	TranslationsLT   []string
+	OccurrenceCount  int
+}
+
+type VocabularyEntry struct {
+	ID               int64    `json:"id"`
+	Lemma            string   `json:"lemma"`
+	POS              string   `json:"pos"`
+	PromptForm       string   `json:"prompt_form"`
+	CEFRLevel        string   `json:"cefr_level"`
+	ObscurityScore   float64  `json:"obscurity_score"`
+	GlobalRarity     float64  `json:"global_rarity"`
+	LibraryIDF       float64  `json:"library_idf"`
+	BookSalience     float64  `json:"book_salience"`
+	GlobalZipfFreq   float64  `json:"global_zipf_freq"`
+	OccurrenceCount  int      `json:"occurrence_count"`
+	BooksWithLexeme  int      `json:"books_with_lexeme"`
+	TotalBooks       int      `json:"total_books"`
+	FullDefinition   string   `json:"full_definition"`
+	ShortDefinitions []string `json:"short_definitions"`
+	TranslationsLT   []string `json:"translations_lt"`
+	MasteryLevel     int      `json:"mastery_level"`
+	Known            bool     `json:"known"`
+}
+
+type VocabularyFilter struct {
+	Page     int
+	PageSize int
+	POS      string
+	Search   string
+}
+
+type VocabularyPage struct {
+	Book       *Book             `json:"book"`
+	Items      []VocabularyEntry `json:"items"`
+	Total      int               `json:"total"`
+	Page       int               `json:"page"`
+	PageSize   int               `json:"page_size"`
+	TotalPages int               `json:"total_pages"`
+}
+
 
 type Store struct {
 	db *sql.DB
@@ -103,6 +158,9 @@ CREATE TABLE IF NOT EXISTS book_lexemes (
 	occurrence_count INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY(book_id, lexeme_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_book_lexemes_lexeme_id ON book_lexemes(lexeme_id);
+
 
 CREATE TABLE IF NOT EXISTS excerpts (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,4 +309,291 @@ func (s *Store) ListBooks() ([]Book, error) {
 	}
 	return books, nil
 }
+
+func (s *Store) GetBook(bookID int64) (*Book, error) {
+	var b Book
+	var m0, m1, m2, m3, m4, m5 int
+	err := s.db.QueryRow(`
+		SELECT
+			b.id,
+			b.title,
+			b.author,
+			b.filename,
+			b.file_size,
+			b.sha256,
+			b.imported_at,
+			COUNT(bl.lexeme_id) AS total_lexemes,
+			COALESCE(SUM(CASE WHEN l.known = 1 THEN 1 ELSE 0 END), 0) AS known_count,
+			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level >= 5 THEN 1 ELSE 0 END), 0) AS mastered_count,
+			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 0 THEN 1 ELSE 0 END), 0) AS m0,
+			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 1 THEN 1 ELSE 0 END), 0) AS m1,
+			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 2 THEN 1 ELSE 0 END), 0) AS m2,
+			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 3 THEN 1 ELSE 0 END), 0) AS m3,
+			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 4 THEN 1 ELSE 0 END), 0) AS m4,
+			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level >= 5 THEN 1 ELSE 0 END), 0) AS m5
+		FROM books b
+		LEFT JOIN book_lexemes bl ON bl.book_id = b.id
+		LEFT JOIN lexemes l ON l.id = bl.lexeme_id
+		WHERE b.id = ?
+		GROUP BY b.id
+	`, bookID).Scan(
+		&b.ID, &b.Title, &b.Author, &b.Filename, &b.FileSize, &b.SHA256, &b.ImportedAt,
+		&b.TotalLexemes, &b.KnownCount, &b.MasteredCount,
+		&m0, &m1, &m2, &m3, &m4, &m5,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrBookNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	b.MasteryCounts = map[string]int{
+		"0": m0,
+		"1": m1,
+		"2": m2,
+		"3": m3,
+		"4": m4,
+		"5": m5,
+	}
+	return &b, nil
+}
+
+func (s *Store) SaveBookLexemes(bookID int64, items []LexemeInput) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	upsertLexemeStmt, err := tx.Prepare(`
+		INSERT INTO lexemes (
+			lemma, pos, prompt_form, cefr_level, global_zipf_freq,
+			full_definition, short_definitions_json, translations_lt_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(lemma, pos) DO UPDATE SET
+			prompt_form = excluded.prompt_form,
+			cefr_level = excluded.cefr_level,
+			global_zipf_freq = excluded.global_zipf_freq,
+			full_definition = excluded.full_definition,
+			short_definitions_json = excluded.short_definitions_json,
+			translations_lt_json = excluded.translations_lt_json
+	`)
+	if err != nil {
+		return err
+	}
+	defer upsertLexemeStmt.Close()
+
+	selectLexemeIDStmt, err := tx.Prepare(`SELECT id FROM lexemes WHERE lemma = ? AND pos = ?`)
+	if err != nil {
+		return err
+	}
+	defer selectLexemeIDStmt.Close()
+
+	upsertBookLexemeStmt, err := tx.Prepare(`
+		INSERT INTO book_lexemes (book_id, lexeme_id, occurrence_count)
+		VALUES (?, ?, ?)
+		ON CONFLICT(book_id, lexeme_id) DO UPDATE SET
+			occurrence_count = excluded.occurrence_count
+	`)
+	if err != nil {
+		return err
+	}
+	defer upsertBookLexemeStmt.Close()
+
+	for _, item := range items {
+		shortDefs := item.ShortDefinitions
+		if shortDefs == nil {
+			shortDefs = []string{}
+		}
+		shortJSON, err := json.Marshal(shortDefs)
+		if err != nil {
+			return err
+		}
+
+		transLT := item.TranslationsLT
+		if transLT == nil {
+			transLT = []string{}
+		}
+		ltJSON, err := json.Marshal(transLT)
+		if err != nil {
+			return err
+		}
+
+		if _, err := upsertLexemeStmt.Exec(
+			item.Lemma,
+			item.POS,
+			item.PromptForm,
+			item.CEFRLevel,
+			item.GlobalZipfFreq,
+			item.FullDefinition,
+			string(shortJSON),
+			string(ltJSON),
+		); err != nil {
+			return err
+		}
+
+		var lexemeID int64
+		if err := selectLexemeIDStmt.QueryRow(item.Lemma, item.POS).Scan(&lexemeID); err != nil {
+			return err
+		}
+
+		if _, err := upsertBookLexemeStmt.Exec(bookID, lexemeID, item.OccurrenceCount); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *Store) ListBookVocabulary(bookID int64, filter VocabularyFilter) (VocabularyPage, error) {
+	book, err := s.GetBook(bookID)
+	if err != nil {
+		return VocabularyPage{}, err
+	}
+
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := filter.PageSize
+	if pageSize < 1 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+
+	var whereClauses []string
+	var args []any
+	whereClauses = append(whereClauses, "bl.book_id = ?")
+	args = append(args, bookID)
+
+	posFilter := strings.ToLower(strings.TrimSpace(filter.POS))
+	if posFilter != "" {
+		whereClauses = append(whereClauses, "l.pos = ?")
+		args = append(args, posFilter)
+	}
+
+	searchFilter := strings.ToLower(strings.TrimSpace(filter.Search))
+	if searchFilter != "" {
+		whereClauses = append(whereClauses, "LOWER(l.lemma) LIKE '%' || ? || '%'")
+		args = append(args, searchFilter)
+	}
+
+	whereSQL := strings.Join(whereClauses, " AND ")
+
+	var total int
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM book_lexemes bl
+		JOIN lexemes l ON l.id = bl.lexeme_id
+		WHERE %s
+	`, whereSQL)
+	if err := s.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		return VocabularyPage{}, err
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = (total + pageSize - 1) / pageSize
+	}
+
+	offset := (page - 1) * pageSize
+	queryArgs := append(append([]any{}, args...), pageSize, offset)
+
+	dataQuery := fmt.Sprintf(`
+		WITH tb AS (
+			SELECT COUNT(*) AS total_books FROM books
+		),
+		lc AS (
+			SELECT lexeme_id, COUNT(*) AS books_with_lexeme
+			FROM book_lexemes
+			GROUP BY lexeme_id
+		)
+		SELECT
+			l.id,
+			l.lemma,
+			l.pos,
+			l.prompt_form,
+			COALESCE(l.cefr_level, ''),
+			max(0.0, 5.0 - l.global_zipf_freq) AS global_rarity,
+			ln(1.0 + CAST(tb.total_books AS REAL) / CAST(lc.books_with_lexeme AS REAL)) AS library_idf,
+			ln(1.0 + CAST(bl.occurrence_count AS REAL)) AS book_salience,
+			(
+				max(0.0, 5.0 - l.global_zipf_freq)
+				+ ln(1.0 + CAST(tb.total_books AS REAL) / CAST(lc.books_with_lexeme AS REAL))
+				+ ln(1.0 + CAST(bl.occurrence_count AS REAL))
+			) AS obscurity_score,
+			l.global_zipf_freq,
+			bl.occurrence_count,
+			lc.books_with_lexeme,
+			tb.total_books,
+			l.full_definition,
+			l.short_definitions_json,
+			l.translations_lt_json,
+			l.mastery_level,
+			l.known
+		FROM book_lexemes bl
+		JOIN lexemes l ON l.id = bl.lexeme_id
+		JOIN lc ON lc.lexeme_id = l.id
+		CROSS JOIN tb
+		WHERE %s
+		ORDER BY obscurity_score DESC, l.lemma ASC, l.pos ASC
+		LIMIT ? OFFSET ?
+	`, whereSQL)
+
+	rows, err := s.db.Query(dataQuery, queryArgs...)
+	if err != nil {
+		return VocabularyPage{}, err
+	}
+	defer rows.Close()
+
+	items := make([]VocabularyEntry, 0)
+	for rows.Next() {
+		var entry VocabularyEntry
+		var shortJSON, ltJSON string
+		if err := rows.Scan(
+			&entry.ID,
+			&entry.Lemma,
+			&entry.POS,
+			&entry.PromptForm,
+			&entry.CEFRLevel,
+			&entry.GlobalRarity,
+			&entry.LibraryIDF,
+			&entry.BookSalience,
+			&entry.ObscurityScore,
+			&entry.GlobalZipfFreq,
+			&entry.OccurrenceCount,
+			&entry.BooksWithLexeme,
+			&entry.TotalBooks,
+			&entry.FullDefinition,
+			&shortJSON,
+			&ltJSON,
+			&entry.MasteryLevel,
+			&entry.Known,
+		); err != nil {
+			return VocabularyPage{}, err
+		}
+		if err := json.Unmarshal([]byte(shortJSON), &entry.ShortDefinitions); err != nil || entry.ShortDefinitions == nil {
+			entry.ShortDefinitions = []string{}
+		}
+		if err := json.Unmarshal([]byte(ltJSON), &entry.TranslationsLT); err != nil || entry.TranslationsLT == nil {
+			entry.TranslationsLT = []string{}
+		}
+		items = append(items, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return VocabularyPage{}, err
+	}
+
+	return VocabularyPage{
+		Book:       book,
+		Items:      items,
+		Total:      total,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+	}, nil
+}
+
 

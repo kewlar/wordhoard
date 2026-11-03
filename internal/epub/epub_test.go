@@ -95,3 +95,23 @@ func TestReadRealEPUB(t *testing.T) {
 	}
 }
 
+func TestReadChaptersExtractsTextFromSpine(t *testing.T) {
+	dir := t.TempDir()
+	epubPath := createTestEPUB(t, dir, "sample.epub", "The Laconic Chronicles", "Ada Lovelace")
+
+	chapters, err := epub.ReadChapters(epubPath)
+	if err != nil {
+		t.Fatalf("ReadChapters failed: %v", err)
+	}
+	if len(chapters) != 1 {
+		t.Fatalf("expected 1 chapter, got %d", len(chapters))
+	}
+	if chapters[0].Title != "Chapter 1" {
+		t.Errorf("expected chapter title %q, got %q", "Chapter 1", chapters[0].Title)
+	}
+	if len(chapters[0].Paragraphs) != 1 || chapters[0].Paragraphs[0] != "A laconic answer followed the ephemeral sunset." {
+		t.Errorf("unexpected paragraphs: %+v", chapters[0].Paragraphs)
+	}
+}
+
+

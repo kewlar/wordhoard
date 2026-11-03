@@ -13,10 +13,25 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
+	"github.com/tsawler/prose/v3"
 
 	"ebook-vocab/internal/db"
+	"ebook-vocab/internal/dictionary"
 	"ebook-vocab/internal/epub"
 )
+
+type Option func(*config)
+
+type config struct {
+	dict *dictionary.Dictionary
+}
+
+func WithDictionary(d *dictionary.Dictionary) Option {
+	return func(c *config) {
+		c.dict = d
+	}
+}
+
 
 type Status string
 
@@ -109,7 +124,18 @@ func expandHome(p string) string {
 	return p
 }
 
-func Run(store *db.Store, patterns []string, onProgress func(Event)) (Summary, error) {
+func Run(store *db.Store, patterns []string, onProgress func(Event), opts ...Option) (Summary, error) {
+	cfg := &config{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+	dict := cfg.dict
+	if dict == nil {
+		dict = dictionary.Default()
+	}
+
 	files, err := ResolveFiles(patterns)
 	if err != nil {
 		return Summary{}, err
@@ -126,7 +152,7 @@ func Run(store *db.Store, patterns []string, onProgress func(Event)) (Summary, e
 	}
 
 	for i, path := range files {
-		res := processFile(store, i, path, onProgress)
+		res := processFile(store, dict, i, path, onProgress)
 		summary.Files[i] = res
 		switch res.Status {
 		case StatusDone:
@@ -141,7 +167,8 @@ func Run(store *db.Store, patterns []string, onProgress func(Event)) (Summary, e
 	return summary, nil
 }
 
-func processFile(store *db.Store, index int, path string, onProgress func(Event)) FileResult {
+func processFile(store *db.Store, dict *dictionary.Dictionary, index int, path string, onProgress func(Event)) FileResult {
+
 	emit := func(ev Event) {
 		if onProgress != nil {
 			onProgress(ev)
@@ -219,7 +246,15 @@ func processFile(store *db.Store, index int, path string, onProgress func(Event)
 		Author: meta.Author,
 	})
 
-	_, _, err = store.CreateBook(db.BookInput{
+	chapters, err := epub.ReadChapters(path)
+	if err != nil {
+		emit(Event{Index: index, Path: path, Status: StatusError, Err: err})
+		return FileResult{Path: path, Status: StatusError, Err: err}
+	}
+
+	extracted := extractBookLexemes(chapters, dict)
+
+	book, _, err := store.CreateBook(db.BookInput{
 		Title:    meta.Title,
 		Author:   meta.Author,
 		Filename: path,
@@ -231,22 +266,102 @@ func processFile(store *db.Store, index int, path string, onProgress func(Event)
 		return FileResult{Path: path, Status: StatusError, Err: err}
 	}
 
+	if len(extracted) > 0 {
+		if err := store.SaveBookLexemes(book.ID, extracted); err != nil {
+			emit(Event{Index: index, Path: path, Status: StatusError, Err: err})
+			return FileResult{Path: path, Status: StatusError, Err: err}
+		}
+	}
+
+	lexemeCount := len(extracted)
 	emit(Event{
 		Index:       index,
 		Path:        path,
 		Status:      StatusDone,
 		Title:       meta.Title,
 		Author:      meta.Author,
-		LexemeCount: 0,
+		LexemeCount: lexemeCount,
 	})
 	return FileResult{
 		Path:        path,
 		Status:      StatusDone,
 		Title:       meta.Title,
 		Author:      meta.Author,
-		LexemeCount: 0,
+		LexemeCount: lexemeCount,
 	}
 }
+
+var quoteReplacer = strings.NewReplacer(
+	"“", "\"",
+	"”", "\"",
+	"„", "\"",
+	"‟", "\"",
+	"‘", "'",
+	"’", "'",
+	"‚", "'",
+	"‛", "'",
+)
+
+type lexemeKey struct {
+	lemma string
+	pos   dictionary.POS
+}
+
+func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary) []db.LexemeInput {
+	counts := make(map[lexemeKey]int)
+	results := make(map[lexemeKey]*dictionary.LookupResult)
+
+	for _, ch := range chapters {
+		for _, para := range ch.Paragraphs {
+			clean := quoteReplacer.Replace(para)
+			if strings.TrimSpace(clean) == "" {
+				continue
+			}
+			doc, err := prose.NewDocument(
+				clean,
+				prose.WithExtraction(false),
+				prose.WithSegmentation(false),
+			)
+			if err != nil {
+				continue
+			}
+			for _, tok := range doc.Tokens() {
+				res, ok := dict.Lookup(tok.Text, tok.Tag)
+				if !ok || res.IsCoreVocabulary {
+					continue
+				}
+				key := lexemeKey{lemma: res.Lemma, pos: res.POS}
+				counts[key]++
+				if _, exists := results[key]; !exists {
+					results[key] = res
+				}
+			}
+		}
+	}
+
+	out := make([]db.LexemeInput, 0, len(results))
+	for key, res := range results {
+		out = append(out, db.LexemeInput{
+			Lemma:            res.Lemma,
+			POS:              string(res.POS),
+			PromptForm:       res.PromptForm,
+			CEFRLevel:        res.CEFRLevel,
+			GlobalZipfFreq:   res.GlobalZipfFreq,
+			FullDefinition:   res.FullDefinition,
+			ShortDefinitions: res.ShortDefinitions,
+			TranslationsLT:   res.TranslationsLT,
+			OccurrenceCount:  counts[key],
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Lemma != out[j].Lemma {
+			return out[i].Lemma < out[j].Lemma
+		}
+		return out[i].POS < out[j].POS
+	})
+	return out
+}
+
 
 func computeSHA256(path string) (string, error) {
 	f, err := os.Open(path)
@@ -391,7 +506,7 @@ func formatStatus(s Status) string {
 	}
 }
 
-func RunTUI(store *db.Store, patterns []string, out io.Writer) (Summary, error) {
+func RunTUI(store *db.Store, patterns []string, out io.Writer, opts ...Option) (Summary, error) {
 	if out == nil {
 		out = os.Stdout
 	}
@@ -411,7 +526,7 @@ func RunTUI(store *db.Store, patterns []string, out io.Writer) (Summary, error) 
 	}
 
 	if !isTTY {
-		summary, err := Run(store, patterns, nil)
+		summary, err := Run(store, patterns, nil, opts...)
 		fmt.Fprint(out, renderDashboard(summary.Files, summary, true))
 		return summary, err
 	}
@@ -422,10 +537,11 @@ func RunTUI(store *db.Store, patterns []string, out io.Writer) (Summary, error) 
 	go func() {
 		summary, runErr := Run(store, patterns, func(ev Event) {
 			eventsCh <- ev
-		})
+		}, opts...)
 		close(eventsCh)
 		doneCh <- tuiDoneMsg{summary: summary, err: runErr}
 	}()
+
 
 	model := tuiModel{
 		files:    initial,
