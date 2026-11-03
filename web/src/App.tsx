@@ -4,14 +4,14 @@ import {
   type ApiClient,
   type BookSummary,
   type Excerpt,
-  type VocabularyEntry,
+  type LexemeEntry,
   type VocabularyPage,
   type VocabularyQuery,
 } from './api';
 
 export interface AppProps {
   apiClient?: ApiClient;
-  shuffleQuizItems?: (items: VocabularyEntry[]) => VocabularyEntry[];
+  shuffleQuizItems?: (items: LexemeEntry[]) => LexemeEntry[];
 }
 
 type Route =
@@ -31,7 +31,7 @@ function parseRoute(pathname: string): Route {
   return { kind: 'books' };
 }
 
-export function normalizeQuizAnswer(raw: string): string {
+export function normalizeQuizAnswer(raw: string, stripEnglishPrefix = true): string {
   const cleaned = raw
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
@@ -40,28 +40,41 @@ export function normalizeQuizAnswer(raw: string): string {
   if (!cleaned) {
     return '';
   }
+  if (!stripEnglishPrefix) {
+    return cleaned;
+  }
   return cleaned.replace(/^(?:to|a|an)\s+/i, '').trim();
 }
 
 export function evaluateQuizAnswer(
   userInput: string,
-  lexeme: Pick<VocabularyEntry, 'translations_lt' | 'short_definitions'>
+  lexeme: Pick<LexemeEntry, 'translations_lt' | 'short_definitions'>
 ): boolean {
-  const normalizedInput = normalizeQuizAnswer(userInput);
-  if (!normalizedInput) {
+  const normalizedLTInput = normalizeQuizAnswer(userInput, false);
+  if (normalizedLTInput) {
+    const ltMatched = (lexeme.translations_lt ?? []).some((candidate) => {
+      const normalizedCandidate = normalizeQuizAnswer(candidate, false);
+      return normalizedCandidate.length > 0 && normalizedCandidate === normalizedLTInput;
+    });
+    if (ltMatched) {
+      return true;
+    }
+  }
+
+  const normalizedENInput = normalizeQuizAnswer(userInput, true);
+  if (!normalizedENInput) {
     return false;
   }
-  const candidates = [...(lexeme.translations_lt ?? []), ...(lexeme.short_definitions ?? [])];
-  return candidates.some((candidate) => {
-    const normalizedCandidate = normalizeQuizAnswer(candidate);
-    return normalizedCandidate.length > 0 && normalizedCandidate === normalizedInput;
+  return (lexeme.short_definitions ?? []).some((candidate) => {
+    const normalizedCandidate = normalizeQuizAnswer(candidate, true);
+    return normalizedCandidate.length > 0 && normalizedCandidate === normalizedENInput;
   });
 }
 
 export function shuffleQuizBatch(
-  items: VocabularyEntry[],
+  items: LexemeEntry[],
   rng: () => number = Math.random
-): VocabularyEntry[] {
+): LexemeEntry[] {
   const copy = [...items];
   for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
@@ -187,6 +200,10 @@ function BooksListView({ apiClient, onNavigate }: BooksListViewProps) {
           {books.map((book) => {
             const vocabHref = `/books/${book.id}/vocabulary`;
             const quizHref = `/books/${book.id}/quiz`;
+            const dist = book.mastery_distribution ?? {};
+            const unseenCount = dist['0'] ?? 0;
+            const learningCount =
+              (dist['1'] ?? 0) + (dist['2'] ?? 0) + (dist['3'] ?? 0) + (dist['4'] ?? 0);
             return (
               <li
                 key={book.id}
@@ -220,7 +237,8 @@ function BooksListView({ apiClient, onNavigate }: BooksListViewProps) {
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontWeight: 600 }}>{book.total_lexemes} lexemes</div>
                     <div style={{ fontSize: '0.85rem', color: '#666' }}>
-                      {book.mastered_count} mastered · {book.known_count} known
+                      {unseenCount} unseen · {learningCount} learning · {book.mastered_count} mastered ·{' '}
+                      {book.known_count} known
                     </div>
                   </div>
                   <a
@@ -258,17 +276,39 @@ interface BookVocabularyViewProps {
 }
 
 function renderHighlightedExcerpt(ex: Excerpt) {
-  const { text, highlight_start: start, highlight_end: end } = ex;
-  if (start >= 0 && end > start && end <= text.length) {
-    return (
-      <>
-        {text.slice(0, start)}
-        <mark style={{ backgroundColor: '#fff2a8', padding: '0 2px', borderRadius: '2px' }}>
-          {text.slice(start, end)}
-        </mark>
-        {text.slice(end)}
-      </>
-    );
+  const { text, surface_word: surfaceWord, highlight_start: start, highlight_end: end } = ex;
+  if (start >= 0 && end > start) {
+    const directSlice = end <= text.length ? text.slice(start, end) : '';
+    if (end <= text.length && (!surfaceWord || directSlice.toLowerCase() === surfaceWord.toLowerCase())) {
+      return (
+        <>
+          {text.slice(0, start)}
+          <mark style={{ backgroundColor: '#fff2a8', padding: '0 2px', borderRadius: '2px' }}>
+            {directSlice}
+          </mark>
+          {text.slice(end)}
+        </>
+      );
+    }
+
+    const bytes = new TextEncoder().encode(text);
+    if (end <= bytes.length) {
+      const decoder = new TextDecoder();
+      const prefix = decoder.decode(bytes.slice(0, start));
+      const highlighted = decoder.decode(bytes.slice(start, end));
+      const suffix = decoder.decode(bytes.slice(end));
+      if (!surfaceWord || highlighted.toLowerCase() === surfaceWord.toLowerCase()) {
+        return (
+          <>
+            {prefix}
+            <mark style={{ backgroundColor: '#fff2a8', padding: '0 2px', borderRadius: '2px' }}>
+              {highlighted}
+            </mark>
+            {suffix}
+          </>
+        );
+      }
+    }
   }
   return <>{text}</>;
 }
@@ -326,7 +366,7 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
     };
   }, [apiClient, bookId, page, pos, search, includeKnown, refreshTick]);
 
-  const handleToggleKnown = async (item: VocabularyEntry) => {
+  const handleToggleKnown = async (item: LexemeEntry) => {
     const patchFn = apiClient.patchLexeme ?? defaultApiClient.patchLexeme!;
     const nextKnown = !item.known;
     await patchFn(item.id, { known: nextKnown });
@@ -447,7 +487,7 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
       {error && <p role="alert">Error: {error}</p>}
 
       {!loading && !error && items.length === 0 && (
-        <p>No matching lexemes found.</p>
+        <p>No matching lexemes found for this book.</p>
       )}
 
       {!loading && !error && items.length > 0 && (
@@ -661,7 +701,7 @@ interface BookQuizViewProps {
   apiClient: ApiClient;
   bookId: number;
   onNavigate: (path: string) => void;
-  shuffleQuizItems: (items: VocabularyEntry[]) => VocabularyEntry[];
+  shuffleQuizItems: (items: LexemeEntry[]) => LexemeEntry[];
 }
 
 function BookQuizView({
@@ -671,7 +711,7 @@ function BookQuizView({
   shuffleQuizItems,
 }: BookQuizViewProps) {
   const [book, setBook] = useState<BookSummary | undefined>(undefined);
-  const [queue, setQueue] = useState<VocabularyEntry[]>([]);
+  const [queue, setQueue] = useState<LexemeEntry[]>([]);
   const [quizSize, setQuizSize] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -762,12 +802,32 @@ function BookQuizView({
     setPhase('reveal');
   };
 
+  const handleToggleQuizKnown = async () => {
+    if (!currentItem) {
+      return;
+    }
+    const patchFn = apiClient.patchLexeme ?? defaultApiClient.patchLexeme!;
+    const nextKnown = !currentItem.known;
+    await patchFn(currentItem.id, { known: nextKnown });
+    setQueue((prev) =>
+      prev.map((it) => (it.id === currentItem.id ? { ...it, known: nextKnown } : it))
+    );
+    if (phase === 'reveal') {
+      nextButtonRef.current?.focus();
+    } else {
+      answerInputRef.current?.focus();
+    }
+  };
+
   const handleAdvance = () => {
     if (!currentItem || phase !== 'reveal') {
       return;
     }
 
-    if (lastCorrect) {
+    if (lastCorrect || currentItem.known) {
+      if (!lastCorrect && currentItem.known) {
+        setCorrectCount((c) => c + 1);
+      }
       const remaining = queue.slice(1);
       if (remaining.length === 0) {
         onNavigate(`/books/${bookId}/vocabulary`);
@@ -785,7 +845,8 @@ function BookQuizView({
     setPhase('prompt');
   };
 
-  const isFinishing = phase === 'reveal' && lastCorrect && queue.length === 1;
+  const isFinishing =
+    phase === 'reveal' && (lastCorrect || Boolean(currentItem?.known)) && queue.length === 1;
   const progressPercent = quizSize > 0 ? Math.round((correctCount / quizSize) * 100) : 0;
 
   return (
@@ -1032,7 +1093,7 @@ function BookQuizView({
                   </div>
                 )}
 
-                <div>
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
                   <button
                     ref={nextButtonRef}
                     type="button"
@@ -1049,6 +1110,22 @@ function BookQuizView({
                     }}
                   >
                     {isFinishing ? 'Finish' : 'Next'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleToggleQuizKnown()}
+                    style={{
+                      background: currentItem.known ? '#eee' : 'none',
+                      border: '1px solid #ccd4e0',
+                      borderRadius: '6px',
+                      padding: '0.5rem 0.85rem',
+                      fontSize: '0.9rem',
+                      color: '#444',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {currentItem.known ? 'Known (Unmark)' : 'Already Known / Ignore'}
                   </button>
                 </div>
               </div>

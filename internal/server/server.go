@@ -154,15 +154,14 @@ func (s *Server) handlePatchLexeme(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Known        *bool `json:"known"`
-		MasteryLevel *int  `json:"mastery_level"`
+		Known *bool `json:"known"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	updated, err := s.store.UpdateLexeme(id, body.Known, body.MasteryLevel)
+	updated, err := s.store.UpdateLexeme(id, body.Known)
 	if errors.Is(err, db.ErrLexemeNotFound) {
 		writeJSONError(w, http.StatusNotFound, "lexeme not found")
 		return

@@ -68,7 +68,7 @@ type LexemeInput struct {
 	Excerpts         []ExcerptInput
 }
 
-type VocabularyEntry struct {
+type LexemeEntry struct {
 	ID               int64     `json:"id"`
 	Lemma            string    `json:"lemma"`
 	POS              string    `json:"pos"`
@@ -108,17 +108,17 @@ type LexemeStatus struct {
 }
 
 type QuizSession struct {
-	Book  *Book             `json:"book"`
-	Items []VocabularyEntry `json:"items"`
+	Book  *Book         `json:"book"`
+	Items []LexemeEntry `json:"items"`
 }
 
 type VocabularyPage struct {
-	Book       *Book             `json:"book"`
-	Items      []VocabularyEntry `json:"items"`
-	Total      int               `json:"total"`
-	Page       int               `json:"page"`
-	PageSize   int               `json:"page_size"`
-	TotalPages int               `json:"total_pages"`
+	Book       *Book         `json:"book"`
+	Items      []LexemeEntry `json:"items"`
+	Total      int           `json:"total"`
+	Page       int           `json:"page"`
+	PageSize   int           `json:"page_size"`
+	TotalPages int           `json:"total_pages"`
 }
 
 
@@ -521,6 +521,81 @@ func (s *Store) SaveBookLexemes(bookID int64, items []LexemeInput) error {
 	return tx.Commit()
 }
 
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanLexemeEntry(scanner rowScanner) (LexemeEntry, error) {
+	var entry LexemeEntry
+	var shortJSON, ltJSON string
+	if err := scanner.Scan(
+		&entry.ID,
+		&entry.Lemma,
+		&entry.POS,
+		&entry.PromptForm,
+		&entry.CEFRLevel,
+		&entry.GlobalRarity,
+		&entry.LibraryIDF,
+		&entry.BookSalience,
+		&entry.ObscurityScore,
+		&entry.GlobalZipfFreq,
+		&entry.OccurrenceCount,
+		&entry.BooksWithLexeme,
+		&entry.TotalBooks,
+		&entry.FullDefinition,
+		&shortJSON,
+		&ltJSON,
+		&entry.MasteryLevel,
+		&entry.Known,
+	); err != nil {
+		return LexemeEntry{}, err
+	}
+	if err := json.Unmarshal([]byte(shortJSON), &entry.ShortDefinitions); err != nil || entry.ShortDefinitions == nil {
+		entry.ShortDefinitions = []string{}
+	}
+	if err := json.Unmarshal([]byte(ltJSON), &entry.TranslationsLT); err != nil || entry.TranslationsLT == nil {
+		entry.TranslationsLT = []string{}
+	}
+	entry.Excerpts = []Excerpt{}
+	return entry, nil
+}
+
+func (s *Store) attachExcerpts(bookID int64, entries []LexemeEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	exRows, err := s.db.Query(`
+		SELECT id, lexeme_id, chapter, surface_word, text, highlight_start, highlight_end
+		FROM excerpts
+		WHERE book_id = ?
+		ORDER BY id ASC
+	`, bookID)
+	if err != nil {
+		return err
+	}
+	defer exRows.Close()
+
+	byLexeme := make(map[int64][]Excerpt)
+	for exRows.Next() {
+		var ex Excerpt
+		var lexID int64
+		if err := exRows.Scan(&ex.ID, &lexID, &ex.Chapter, &ex.SurfaceWord, &ex.Text, &ex.HighlightStart, &ex.HighlightEnd); err != nil {
+			return err
+		}
+		byLexeme[lexID] = append(byLexeme[lexID], ex)
+	}
+	if err := exRows.Err(); err != nil {
+		return err
+	}
+
+	for i := range entries {
+		if exList, ok := byLexeme[entries[i].ID]; ok {
+			entries[i].Excerpts = exList
+		}
+	}
+	return nil
+}
+
 func (s *Store) ListBookVocabulary(bookID int64, filter VocabularyFilter) (VocabularyPage, error) {
 	book, err := s.GetBook(bookID)
 	if err != nil {
@@ -628,75 +703,20 @@ func (s *Store) ListBookVocabulary(bookID int64, filter VocabularyFilter) (Vocab
 	}
 	defer rows.Close()
 
-	items := make([]VocabularyEntry, 0)
+	items := make([]LexemeEntry, 0)
 	for rows.Next() {
-		var entry VocabularyEntry
-		var shortJSON, ltJSON string
-		if err := rows.Scan(
-			&entry.ID,
-			&entry.Lemma,
-			&entry.POS,
-			&entry.PromptForm,
-			&entry.CEFRLevel,
-			&entry.GlobalRarity,
-			&entry.LibraryIDF,
-			&entry.BookSalience,
-			&entry.ObscurityScore,
-			&entry.GlobalZipfFreq,
-			&entry.OccurrenceCount,
-			&entry.BooksWithLexeme,
-			&entry.TotalBooks,
-			&entry.FullDefinition,
-			&shortJSON,
-			&ltJSON,
-			&entry.MasteryLevel,
-			&entry.Known,
-		); err != nil {
+		entry, err := scanLexemeEntry(rows)
+		if err != nil {
 			return VocabularyPage{}, err
 		}
-		if err := json.Unmarshal([]byte(shortJSON), &entry.ShortDefinitions); err != nil || entry.ShortDefinitions == nil {
-			entry.ShortDefinitions = []string{}
-		}
-		if err := json.Unmarshal([]byte(ltJSON), &entry.TranslationsLT); err != nil || entry.TranslationsLT == nil {
-			entry.TranslationsLT = []string{}
-		}
-		entry.Excerpts = []Excerpt{}
 		items = append(items, entry)
 	}
 	if err := rows.Err(); err != nil {
 		return VocabularyPage{}, err
 	}
 
-	if len(items) > 0 {
-		exRows, err := s.db.Query(`
-			SELECT id, lexeme_id, chapter, surface_word, text, highlight_start, highlight_end
-			FROM excerpts
-			WHERE book_id = ?
-			ORDER BY id ASC
-		`, bookID)
-		if err != nil {
-			return VocabularyPage{}, err
-		}
-		defer exRows.Close()
-
-		byLexeme := make(map[int64][]Excerpt)
-		for exRows.Next() {
-			var ex Excerpt
-			var lexID int64
-			if err := exRows.Scan(&ex.ID, &lexID, &ex.Chapter, &ex.SurfaceWord, &ex.Text, &ex.HighlightStart, &ex.HighlightEnd); err != nil {
-				return VocabularyPage{}, err
-			}
-			byLexeme[lexID] = append(byLexeme[lexID], ex)
-		}
-		if err := exRows.Err(); err != nil {
-			return VocabularyPage{}, err
-		}
-
-		for i := range items {
-			if exList, ok := byLexeme[items[i].ID]; ok {
-				items[i].Excerpts = exList
-			}
-		}
+	if err := s.attachExcerpts(bookID, items); err != nil {
+		return VocabularyPage{}, err
 	}
 
 	return VocabularyPage{
@@ -725,7 +745,7 @@ func (s *Store) getLexemeStatus(lexemeID int64) (*LexemeStatus, error) {
 	return &st, nil
 }
 
-func (s *Store) UpdateLexeme(lexemeID int64, known *bool, masteryLevel *int) (*LexemeStatus, error) {
+func (s *Store) UpdateLexeme(lexemeID int64, known *bool) (*LexemeStatus, error) {
 	st, err := s.getLexemeStatus(lexemeID)
 	if err != nil {
 		return nil, err
@@ -735,20 +755,10 @@ func (s *Store) UpdateLexeme(lexemeID int64, known *bool, masteryLevel *int) (*L
 	if known != nil {
 		newKnown = *known
 	}
-	newMastery := st.MasteryLevel
-	if masteryLevel != nil {
-		newMastery = *masteryLevel
-		if newMastery < 0 {
-			newMastery = 0
-		}
-		if newMastery > 5 {
-			newMastery = 5
-		}
-	}
 
 	if _, err := s.db.Exec(
-		`UPDATE lexemes SET known = ?, mastery_level = ? WHERE id = ?`,
-		newKnown, newMastery, lexemeID,
+		`UPDATE lexemes SET known = ? WHERE id = ?`,
+		newKnown, lexemeID,
 	); err != nil {
 		return nil, err
 	}
@@ -845,75 +855,20 @@ func (s *Store) SelectQuizCandidates(bookID int64, size int) (QuizSession, error
 	}
 	defer rows.Close()
 
-	items := make([]VocabularyEntry, 0)
+	items := make([]LexemeEntry, 0)
 	for rows.Next() {
-		var entry VocabularyEntry
-		var shortJSON, ltJSON string
-		if err := rows.Scan(
-			&entry.ID,
-			&entry.Lemma,
-			&entry.POS,
-			&entry.PromptForm,
-			&entry.CEFRLevel,
-			&entry.GlobalRarity,
-			&entry.LibraryIDF,
-			&entry.BookSalience,
-			&entry.ObscurityScore,
-			&entry.GlobalZipfFreq,
-			&entry.OccurrenceCount,
-			&entry.BooksWithLexeme,
-			&entry.TotalBooks,
-			&entry.FullDefinition,
-			&shortJSON,
-			&ltJSON,
-			&entry.MasteryLevel,
-			&entry.Known,
-		); err != nil {
+		entry, err := scanLexemeEntry(rows)
+		if err != nil {
 			return QuizSession{}, err
 		}
-		if err := json.Unmarshal([]byte(shortJSON), &entry.ShortDefinitions); err != nil || entry.ShortDefinitions == nil {
-			entry.ShortDefinitions = []string{}
-		}
-		if err := json.Unmarshal([]byte(ltJSON), &entry.TranslationsLT); err != nil || entry.TranslationsLT == nil {
-			entry.TranslationsLT = []string{}
-		}
-		entry.Excerpts = []Excerpt{}
 		items = append(items, entry)
 	}
 	if err := rows.Err(); err != nil {
 		return QuizSession{}, err
 	}
 
-	if len(items) > 0 {
-		exRows, err := s.db.Query(`
-			SELECT id, lexeme_id, chapter, surface_word, text, highlight_start, highlight_end
-			FROM excerpts
-			WHERE book_id = ?
-			ORDER BY id ASC
-		`, bookID)
-		if err != nil {
-			return QuizSession{}, err
-		}
-		defer exRows.Close()
-
-		byLexeme := make(map[int64][]Excerpt)
-		for exRows.Next() {
-			var ex Excerpt
-			var lexID int64
-			if err := exRows.Scan(&ex.ID, &lexID, &ex.Chapter, &ex.SurfaceWord, &ex.Text, &ex.HighlightStart, &ex.HighlightEnd); err != nil {
-				return QuizSession{}, err
-			}
-			byLexeme[lexID] = append(byLexeme[lexID], ex)
-		}
-		if err := exRows.Err(); err != nil {
-			return QuizSession{}, err
-		}
-
-		for i := range items {
-			if exList, ok := byLexeme[items[i].ID]; ok {
-				items[i].Excerpts = exList
-			}
-		}
+	if err := s.attachExcerpts(bookID, items); err != nil {
+		return QuizSession{}, err
 	}
 
 	return QuizSession{

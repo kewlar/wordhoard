@@ -21,7 +21,7 @@ export interface Excerpt {
   highlight_end: number;
 }
 
-export interface VocabularyEntry {
+export interface LexemeEntry {
   id: number;
   lemma: string;
   pos: string;
@@ -45,7 +45,7 @@ export interface VocabularyEntry {
 
 export interface VocabularyPage {
   book?: BookSummary;
-  items: VocabularyEntry[];
+  items: LexemeEntry[];
   total: number;
   page: number;
   page_size: number;
@@ -71,7 +71,7 @@ export interface LexemeStatus {
 
 export interface QuizSession {
   book?: BookSummary;
-  items: VocabularyEntry[];
+  items: LexemeEntry[];
 }
 
 export interface ApiClient {
@@ -79,7 +79,7 @@ export interface ApiClient {
   getBookVocabulary?(bookId: number, query?: VocabularyQuery): Promise<VocabularyPage>;
   patchLexeme?(
     lexemeId: number,
-    patch: { known?: boolean; mastery_level?: number }
+    patch: { known?: boolean }
   ): Promise<LexemeStatus>;
   startBookQuiz?(bookId: number, size?: number): Promise<QuizSession>;
   recordLexemeAttempt?(
@@ -126,7 +126,7 @@ export const defaultApiClient: ApiClient = {
 
   async patchLexeme(
     lexemeId: number,
-    patch: { known?: boolean; mastery_level?: number }
+    patch: { known?: boolean }
   ): Promise<LexemeStatus> {
     const res = await fetch(`/api/lexemes/${lexemeId}`, {
       method: 'PATCH',

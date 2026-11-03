@@ -316,7 +316,7 @@ func TestIngestExtractsLearnableLexemesAndFiltersNoise(t *testing.T) {
 		t.Fatalf("store.ListBookVocabulary: %v", err)
 	}
 	if len(vocab.Items) != 3 {
-		t.Fatalf("expected 3 vocabulary items, got %d", len(vocab.Items))
+		t.Fatalf("expected 3 lexeme entries, got %d", len(vocab.Items))
 	}
 
 	// obfuscate has lowest zipf (1.8 -> rarity 3.2) and highest occurrences (2 -> salience ln(3))
@@ -400,7 +400,7 @@ func TestIngestExtractsUpToFiveExcerptsWithAccurateOffsetsAndBoundedLongParagrap
 		t.Fatalf("expected 2 items, got %d", len(vocab.Items))
 	}
 
-	var obfuscateItem, laconicItem *db.VocabularyEntry
+	var obfuscateItem, laconicItem *db.LexemeEntry
 	for i := range vocab.Items {
 		switch vocab.Items[i].Lemma {
 		case "obfuscate":

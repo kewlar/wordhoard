@@ -514,8 +514,8 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		t.Fatalf("expected 200 from POST /api/books/1/quiz, got %d", quizResp1.StatusCode)
 	}
 	var quizData1 struct {
-		Book  *db.Book             `json:"book"`
-		Items []db.VocabularyEntry `json:"items"`
+		Book  *db.Book         `json:"book"`
+		Items []db.LexemeEntry `json:"items"`
 	}
 	if err := json.NewDecoder(quizResp1.Body).Decode(&quizData1); err != nil {
 		t.Fatalf("decode quizData1: %v", err)
@@ -552,7 +552,7 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 	}
 	defer quizResp2.Body.Close()
 	var quizData2 struct {
-		Items []db.VocabularyEntry `json:"items"`
+		Items []db.LexemeEntry `json:"items"`
 	}
 	if err := json.NewDecoder(quizResp2.Body).Decode(&quizData2); err != nil {
 		t.Fatalf("decode quizData2: %v", err)
@@ -594,7 +594,7 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 	}
 	defer quizResp3.Body.Close()
 	var quizData3 struct {
-		Items []db.VocabularyEntry `json:"items"`
+		Items []db.LexemeEntry `json:"items"`
 	}
 	if err := json.NewDecoder(quizResp3.Body).Decode(&quizData3); err != nil {
 		t.Fatalf("decode quizData3: %v", err)
@@ -655,8 +655,8 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 	}
 	defer book2QuizResp.Body.Close()
 	var book2QuizData struct {
-		Book  *db.Book             `json:"book"`
-		Items []db.VocabularyEntry `json:"items"`
+		Book  *db.Book         `json:"book"`
+		Items []db.LexemeEntry `json:"items"`
 	}
 	if err := json.NewDecoder(book2QuizResp.Body).Decode(&book2QuizData); err != nil {
 		t.Fatalf("decode book2QuizData: %v", err)

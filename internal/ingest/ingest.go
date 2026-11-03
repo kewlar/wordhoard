@@ -317,6 +317,10 @@ const (
 	excerptRadius        = 180
 )
 
+func normalizeExcerptText(s string) string {
+	return strings.TrimSpace(quoteReplacer.Replace(s))
+}
+
 func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary) []db.LexemeInput {
 	counts := make(map[lexemeKey]int)
 	results := make(map[lexemeKey]*dictionary.LookupResult)
@@ -324,8 +328,8 @@ func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary) []
 
 	for _, ch := range chapters {
 		for _, para := range ch.Paragraphs {
-			clean := quoteReplacer.Replace(para)
-			if strings.TrimSpace(clean) == "" {
+			clean := normalizeExcerptText(para)
+			if clean == "" {
 				continue
 			}
 			doc, err := prose.NewDocument(

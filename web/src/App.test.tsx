@@ -57,9 +57,9 @@ const sampleVocabularyPage: VocabularyPage = {
           id: 2,
           chapter: 'Chapter 7',
           surface_word: 'laconic',
-          text: 'Her laconic telegram arrived at dawn.',
-          highlight_start: 4,
-          highlight_end: 11,
+          text: 'Jis parašė: laconic telegram at dawn.',
+          highlight_start: 14,
+          highlight_end: 21,
         },
       ],
     },
@@ -119,6 +119,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(screen.getAllByText('John le Carré')).toHaveLength(2);
     expect(screen.getByText(/42 lexemes/i)).toBeInTheDocument();
     expect(screen.getByText(/18 lexemes/i)).toBeInTheDocument();
+    expect(screen.getByText(/30 unseen · 4 learning · 5 mastered · 3 known/i)).toBeInTheDocument();
   });
 
   it('renders an empty-state message when no books have been imported', async () => {
@@ -467,6 +468,66 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(window.location.pathname).toBe('/books/1/vocabulary');
   });
 
+  it('allows toggling Known Status during a quiz without re-queuing the marked lexeme', async () => {
+    const user = userEvent.setup();
+    window.history.pushState({}, '', '/books/1/quiz');
+
+    const startBookQuiz = vi.fn(async () => ({
+      book: sampleBook,
+      items: sampleVocabularyPage.items,
+    }));
+
+    const recordLexemeAttempt = vi.fn(async (id: number) => ({
+      id,
+      lemma: id === 101 ? 'laconic' : 'obfuscate',
+      pos: id === 101 ? 'adjective' : 'verb',
+      mastery_level: 0,
+      known: false,
+    }));
+
+    const patchLexeme = vi.fn(async (id: number, patch: { known?: boolean }) => ({
+      id,
+      lemma: 'laconic',
+      pos: 'adjective',
+      mastery_level: 0,
+      known: Boolean(patch.known),
+    }));
+
+    const client: ApiClient = {
+      listBooks: async () => [sampleBook],
+      getBookVocabulary: async () => sampleVocabularyPage,
+      startBookQuiz,
+      recordLexemeAttempt,
+      patchLexeme,
+    };
+
+    render(<App apiClient={client} shuffleQuizItems={(items) => [...items]} />);
+
+    // Prompt 1: "laconic (adj.)" — skip with Enter
+    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    await user.keyboard('{Enter}');
+
+    // On reveal screen, click "Already Known / Ignore"
+    const ignoreBtn = await screen.findByRole('button', { name: /already known \/ ignore/i });
+    await user.click(ignoreBtn);
+
+    expect(patchLexeme).toHaveBeenCalledWith(101, { known: true });
+    expect(await screen.findByRole('button', { name: /known \(unmark\)/i })).toBeInTheDocument();
+
+    // Focus stays on "Next" button so Enter advances immediately
+    const nextBtn = screen.getByRole('button', { name: /^next$/i });
+    expect(nextBtn).toHaveFocus();
+    await user.keyboard('{Enter}');
+
+    // Prompt 2: "to obfuscate" — answer correctly
+    expect(await screen.findByText('to obfuscate')).toBeInTheDocument();
+    await user.keyboard('obscure{Enter}');
+
+    // Because "laconic" was marked known, it was NOT re-queued at the tail, so the quiz is now ready to Finish!
+    const finishBtn = await screen.findByRole('button', { name: /^finish$/i });
+    expect(finishBtn).toHaveFocus();
+  });
+
   it('normalizes capitalization, whitespace, punctuation, and leading English articles/particles ("to ", "a ", "an ") while rejecting empty answers', () => {
     expect(normalizeQuizAnswer('  To   Shorten! ')).toBe('shorten');
     expect(normalizeQuizAnswer('A "riddle"...')).toBe('riddle');
@@ -486,6 +547,8 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(evaluateQuizAnswer('enigma', lexeme)).toBe(true);
     expect(evaluateQuizAnswer('an enigma', lexeme)).toBe(true);
     expect(evaluateQuizAnswer('  Glaustas, ', lexeme)).toBe(true);
+    // Leading English "to " must NOT be stripped when matching against Lithuanian translations
+    expect(evaluateQuizAnswer('to glaustas', lexeme)).toBe(false);
     expect(evaluateQuizAnswer('', lexeme)).toBe(false);
     expect(evaluateQuizAnswer('   ', lexeme)).toBe(false);
     expect(evaluateQuizAnswer('to ', lexeme)).toBe(false);
