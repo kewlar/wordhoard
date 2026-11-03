@@ -44,6 +44,24 @@ const sampleVocabularyPage: VocabularyPage = {
       translations_lt: ['lakoniškas', 'glaustas'],
       mastery_level: 0,
       known: false,
+      excerpts: [
+        {
+          id: 1,
+          chapter: 'Chapter 3',
+          surface_word: 'laconic',
+          text: 'Magnus gave a laconic reply to his controller.',
+          highlight_start: 14,
+          highlight_end: 21,
+        },
+        {
+          id: 2,
+          chapter: 'Chapter 7',
+          surface_word: 'laconic',
+          text: 'Her laconic telegram arrived at dawn.',
+          highlight_start: 4,
+          highlight_end: 11,
+        },
+      ],
     },
     {
       id: 102,
@@ -245,6 +263,45 @@ describe('Books List & Book Vocabulary Browser UI', () => {
       );
     });
     expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+  });
+
+  it('toggles "View in context" to expand and collapse book excerpts with highlighted surface words and chapter references', async () => {
+    const user = userEvent.setup();
+    window.history.pushState({}, '', '/books/1/vocabulary');
+
+    const client: ApiClient = {
+      listBooks: async () => [sampleBook],
+      getBookVocabulary: async () => sampleVocabularyPage,
+    };
+
+    render(<App apiClient={client} />);
+
+    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+
+    // Excerpts are initially collapsed
+    expect(screen.queryByText('Chapter 3')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Magnus gave a/)).not.toBeInTheDocument();
+
+    const toggleButtons = screen.getAllByRole('button', { name: /view in context/i });
+    expect(toggleButtons.length).toBeGreaterThanOrEqual(1);
+
+    // Click to expand excerpts for the first entry ("laconic (adj.)")
+    await user.click(toggleButtons[0]!);
+
+    expect(screen.getByText('Chapter 3')).toBeInTheDocument();
+    expect(screen.getByText('Chapter 7')).toBeInTheDocument();
+    expect(screen.getByText(/Magnus gave a/)).toBeInTheDocument();
+    expect(screen.getByText(/reply to his controller\./)).toBeInTheDocument();
+
+    // Verify the surface word is rendered inside a <mark> element
+    const marks = document.querySelectorAll('mark');
+    expect(marks).toHaveLength(2);
+    expect(marks[0]?.textContent).toBe('laconic');
+    expect(marks[1]?.textContent).toBe('laconic');
+
+    // Click again to collapse
+    await user.click(toggleButtons[0]!);
+    expect(screen.queryByText('Chapter 3')).not.toBeInTheDocument();
   });
 });
 

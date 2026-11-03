@@ -331,4 +331,132 @@ func TestIngestExtractsLearnableLexemesAndFiltersNoise(t *testing.T) {
 	}
 }
 
+func TestIngestExtractsUpToFiveExcerptsWithAccurateOffsetsAndBoundedLongParagraphs(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := db.Open(filepath.Join(tempDir, "vocab.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer store.Close()
+
+	fixtureDict := dictionary.NewFixture(
+		[]dictionary.FixtureEntry{
+			{
+				Lemma:          "obfuscate",
+				POS:            dictionary.POSVerb,
+				CEFRLevel:      "",
+				GlobalZipfFreq: 1.8,
+				Senses: []dictionary.Sense{
+					{
+						Definition:       "Render obscure, unclear, or unintelligible",
+						ShortDefinitions: []string{"obscure", "confuse"},
+					},
+				},
+			},
+			{
+				Lemma:          "laconic",
+				POS:            dictionary.POSAdjective,
+				CEFRLevel:      "c1",
+				GlobalZipfFreq: 2.2,
+				Senses: []dictionary.Sense{
+					{
+						Definition:       "Using very few words",
+						ShortDefinitions: []string{"concise", "terse"},
+					},
+				},
+			},
+		},
+		map[string]string{
+			"obfuscated":  "obfuscate",
+			"obfuscating": "obfuscate",
+			"obfuscates":  "obfuscate",
+		},
+	)
+
+	// Build an excessively long paragraph (> 600 chars) containing "laconic" in the middle
+	longPrefix := strings.Repeat("The quiet diplomat walked along the misty riverbank in Vienna while pondering the archives. ", 5)
+	longSuffix := strings.Repeat("Meanwhile the couriers waited near the station platform for the midnight express train. ", 5)
+	longPara := longPrefix + "His “laconic” remark surprised everyone at the embassy." + " " + longSuffix
+
+	body := strings.Join([]string{
+		"First, he obfuscated the initial report.",
+		"</p><p>Second, she obfuscates the ledger entries, and he obfuscated the cables too.",
+		"</p><p>Fourth, they were obfuscating the trail in Berlin.",
+		"</p><p>Fifth, nobody obfuscated the truth better.",
+		"</p><p>Sixth, he obfuscated one more time beyond the cap.",
+		"</p><p>" + longPara,
+	}, "")
+
+	epubPath := createTestEPUB(t, tempDir, "excerpts.epub", "Excerpt Test Book", "Author X", body)
+	if _, err := ingest.Run(store, []string{epubPath}, nil, ingest.WithDictionary(fixtureDict)); err != nil {
+		t.Fatalf("ingest.Run: %v", err)
+	}
+
+	vocab, err := store.ListBookVocabulary(1, db.VocabularyFilter{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("ListBookVocabulary: %v", err)
+	}
+	if len(vocab.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(vocab.Items))
+	}
+
+	var obfuscateItem, laconicItem *db.VocabularyEntry
+	for i := range vocab.Items {
+		switch vocab.Items[i].Lemma {
+		case "obfuscate":
+			obfuscateItem = &vocab.Items[i]
+		case "laconic":
+			laconicItem = &vocab.Items[i]
+		}
+	}
+	if obfuscateItem == nil || laconicItem == nil {
+		t.Fatalf("expected both obfuscate and laconic items")
+	}
+
+	// obfuscate appeared 6 times, so occurrence_count == 6, but excerpts must be capped at 5
+	if obfuscateItem.OccurrenceCount != 6 {
+		t.Errorf("expected obfuscate OccurrenceCount=6, got %d", obfuscateItem.OccurrenceCount)
+	}
+	if len(obfuscateItem.Excerpts) != 5 {
+		t.Fatalf("expected 5 excerpts for obfuscate (5-excerpt cap), got %d", len(obfuscateItem.Excerpts))
+	}
+
+	wantSurface := []string{"obfuscated", "obfuscates", "obfuscated", "obfuscating", "obfuscated"}
+	for i, ex := range obfuscateItem.Excerpts {
+		if ex.Chapter != "Chapter 1" {
+			t.Errorf("excerpt %d: expected Chapter='Chapter 1', got %q", i, ex.Chapter)
+		}
+		if ex.SurfaceWord != wantSurface[i] {
+			t.Errorf("excerpt %d: expected SurfaceWord=%q, got %q", i, wantSurface[i], ex.SurfaceWord)
+		}
+		if ex.HighlightStart < 0 || ex.HighlightEnd > len(ex.Text) || ex.HighlightStart >= ex.HighlightEnd {
+			t.Fatalf("excerpt %d: invalid offsets [%d:%d] for text len %d", i, ex.HighlightStart, ex.HighlightEnd, len(ex.Text))
+		}
+		gotSlice := ex.Text[ex.HighlightStart:ex.HighlightEnd]
+		if gotSlice != ex.SurfaceWord {
+			t.Errorf("excerpt %d: text[%d:%d] = %q, want %q (text=%q)", i, ex.HighlightStart, ex.HighlightEnd, gotSlice, ex.SurfaceWord, ex.Text)
+		}
+	}
+	// Notice in the 2nd paragraph ("Second, she obfuscates the ledger entries, and he obfuscated the cables too."),
+	// both occurrences are in the same paragraph; the 2nd excerpt highlights "obfuscates" and the 3rd highlights "obfuscated".
+	if obfuscateItem.Excerpts[1].HighlightStart == obfuscateItem.Excerpts[2].HighlightStart {
+		t.Errorf("expected distinct highlight offsets for two occurrences in the same paragraph, got %d and %d",
+			obfuscateItem.Excerpts[1].HighlightStart, obfuscateItem.Excerpts[2].HighlightStart)
+	}
+
+	// Verify laconic excerpt from excessively long paragraph is bounded and accurately highlighted
+	if len(laconicItem.Excerpts) != 1 {
+		t.Fatalf("expected 1 excerpt for laconic, got %d", len(laconicItem.Excerpts))
+	}
+	lacEx := laconicItem.Excerpts[0]
+	if len(lacEx.Text) >= len(longPara) || len(lacEx.Text) > 500 {
+		t.Errorf("expected long paragraph (len %d) to be bounded (<= 500 chars), got len %d: %q", len(longPara), len(lacEx.Text), lacEx.Text)
+	}
+	if lacEx.Text[lacEx.HighlightStart:lacEx.HighlightEnd] != "laconic" {
+		t.Errorf("expected bounded excerpt slice [%d:%d] to equal 'laconic', got %q in %q",
+			lacEx.HighlightStart, lacEx.HighlightEnd, lacEx.Text[lacEx.HighlightStart:lacEx.HighlightEnd], lacEx.Text)
+	}
+}
+
+
 

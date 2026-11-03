@@ -35,6 +35,23 @@ type BookInput struct {
 	SHA256   string
 }
 
+type Excerpt struct {
+	ID             int64  `json:"id"`
+	Chapter        string `json:"chapter"`
+	SurfaceWord    string `json:"surface_word"`
+	Text           string `json:"text"`
+	HighlightStart int    `json:"highlight_start"`
+	HighlightEnd   int    `json:"highlight_end"`
+}
+
+type ExcerptInput struct {
+	Chapter        string
+	SurfaceWord    string
+	Text           string
+	HighlightStart int
+	HighlightEnd   int
+}
+
 type LexemeInput struct {
 	Lemma            string
 	POS              string
@@ -45,27 +62,29 @@ type LexemeInput struct {
 	ShortDefinitions []string
 	TranslationsLT   []string
 	OccurrenceCount  int
+	Excerpts         []ExcerptInput
 }
 
 type VocabularyEntry struct {
-	ID               int64    `json:"id"`
-	Lemma            string   `json:"lemma"`
-	POS              string   `json:"pos"`
-	PromptForm       string   `json:"prompt_form"`
-	CEFRLevel        string   `json:"cefr_level"`
-	ObscurityScore   float64  `json:"obscurity_score"`
-	GlobalRarity     float64  `json:"global_rarity"`
-	LibraryIDF       float64  `json:"library_idf"`
-	BookSalience     float64  `json:"book_salience"`
-	GlobalZipfFreq   float64  `json:"global_zipf_freq"`
-	OccurrenceCount  int      `json:"occurrence_count"`
-	BooksWithLexeme  int      `json:"books_with_lexeme"`
-	TotalBooks       int      `json:"total_books"`
-	FullDefinition   string   `json:"full_definition"`
-	ShortDefinitions []string `json:"short_definitions"`
-	TranslationsLT   []string `json:"translations_lt"`
-	MasteryLevel     int      `json:"mastery_level"`
-	Known            bool     `json:"known"`
+	ID               int64     `json:"id"`
+	Lemma            string    `json:"lemma"`
+	POS              string    `json:"pos"`
+	PromptForm       string    `json:"prompt_form"`
+	CEFRLevel        string    `json:"cefr_level"`
+	ObscurityScore   float64   `json:"obscurity_score"`
+	GlobalRarity     float64   `json:"global_rarity"`
+	LibraryIDF       float64   `json:"library_idf"`
+	BookSalience     float64   `json:"book_salience"`
+	GlobalZipfFreq   float64   `json:"global_zipf_freq"`
+	OccurrenceCount  int       `json:"occurrence_count"`
+	BooksWithLexeme  int       `json:"books_with_lexeme"`
+	TotalBooks       int       `json:"total_books"`
+	FullDefinition   string    `json:"full_definition"`
+	ShortDefinitions []string  `json:"short_definitions"`
+	TranslationsLT   []string  `json:"translations_lt"`
+	MasteryLevel     int       `json:"mastery_level"`
+	Known            bool      `json:"known"`
+	Excerpts         []Excerpt `json:"excerpts"`
 }
 
 type VocabularyFilter struct {
@@ -172,6 +191,8 @@ CREATE TABLE IF NOT EXISTS excerpts (
 	highlight_start INTEGER NOT NULL DEFAULT 0,
 	highlight_end INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE INDEX IF NOT EXISTS idx_excerpts_book_lexeme ON excerpts(book_id, lexeme_id);
 `
 	_, err := s.db.Exec(schema)
 	return err
@@ -400,6 +421,21 @@ func (s *Store) SaveBookLexemes(bookID int64, items []LexemeInput) error {
 	}
 	defer upsertBookLexemeStmt.Close()
 
+	deleteExcerptsStmt, err := tx.Prepare(`DELETE FROM excerpts WHERE book_id = ? AND lexeme_id = ?`)
+	if err != nil {
+		return err
+	}
+	defer deleteExcerptsStmt.Close()
+
+	insertExcerptStmt, err := tx.Prepare(`
+		INSERT INTO excerpts (book_id, lexeme_id, chapter, surface_word, text, highlight_start, highlight_end)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer insertExcerptStmt.Close()
+
 	for _, item := range items {
 		shortDefs := item.ShortDefinitions
 		if shortDefs == nil {
@@ -439,6 +475,28 @@ func (s *Store) SaveBookLexemes(bookID int64, items []LexemeInput) error {
 
 		if _, err := upsertBookLexemeStmt.Exec(bookID, lexemeID, item.OccurrenceCount); err != nil {
 			return err
+		}
+
+		if _, err := deleteExcerptsStmt.Exec(bookID, lexemeID); err != nil {
+			return err
+		}
+
+		excerpts := item.Excerpts
+		if len(excerpts) > 5 {
+			excerpts = excerpts[:5]
+		}
+		for _, ex := range excerpts {
+			if _, err := insertExcerptStmt.Exec(
+				bookID,
+				lexemeID,
+				ex.Chapter,
+				ex.SurfaceWord,
+				ex.Text,
+				ex.HighlightStart,
+				ex.HighlightEnd,
+			); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -580,10 +638,43 @@ func (s *Store) ListBookVocabulary(bookID int64, filter VocabularyFilter) (Vocab
 		if err := json.Unmarshal([]byte(ltJSON), &entry.TranslationsLT); err != nil || entry.TranslationsLT == nil {
 			entry.TranslationsLT = []string{}
 		}
+		entry.Excerpts = []Excerpt{}
 		items = append(items, entry)
 	}
 	if err := rows.Err(); err != nil {
 		return VocabularyPage{}, err
+	}
+
+	if len(items) > 0 {
+		exRows, err := s.db.Query(`
+			SELECT id, lexeme_id, chapter, surface_word, text, highlight_start, highlight_end
+			FROM excerpts
+			WHERE book_id = ?
+			ORDER BY id ASC
+		`, bookID)
+		if err != nil {
+			return VocabularyPage{}, err
+		}
+		defer exRows.Close()
+
+		byLexeme := make(map[int64][]Excerpt)
+		for exRows.Next() {
+			var ex Excerpt
+			var lexID int64
+			if err := exRows.Scan(&ex.ID, &lexID, &ex.Chapter, &ex.SurfaceWord, &ex.Text, &ex.HighlightStart, &ex.HighlightEnd); err != nil {
+				return VocabularyPage{}, err
+			}
+			byLexeme[lexID] = append(byLexeme[lexID], ex)
+		}
+		if err := exRows.Err(); err != nil {
+			return VocabularyPage{}, err
+		}
+
+		for i := range items {
+			if exList, ok := byLexeme[items[i].ID]; ok {
+				items[i].Excerpts = exList
+			}
+		}
 	}
 
 	return VocabularyPage{

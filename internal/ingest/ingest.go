@@ -300,6 +300,10 @@ var quoteReplacer = strings.NewReplacer(
 	"’", "'",
 	"‚", "'",
 	"‛", "'",
+	"—", " -- ",
+	"–", " - ",
+	"…", "...",
+	"\u00a0", " ",
 )
 
 type lexemeKey struct {
@@ -307,9 +311,16 @@ type lexemeKey struct {
 	pos   dictionary.POS
 }
 
+const (
+	maxExcerptsPerLexeme = 5
+	maxExcerptLength     = 400
+	excerptRadius        = 180
+)
+
 func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary) []db.LexemeInput {
 	counts := make(map[lexemeKey]int)
 	results := make(map[lexemeKey]*dictionary.LookupResult)
+	excerpts := make(map[lexemeKey][]db.ExcerptInput)
 
 	for _, ch := range chapters {
 		for _, para := range ch.Paragraphs {
@@ -325,7 +336,18 @@ func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary) []
 			if err != nil {
 				continue
 			}
+			searchPos := 0
 			for _, tok := range doc.Tokens() {
+				tokStart := -1
+				if tok.Text != "" {
+					if idx := strings.Index(clean[searchPos:], tok.Text); idx >= 0 {
+						tokStart = searchPos + idx
+						searchPos = tokStart + len(tok.Text)
+					} else if idx := strings.Index(clean, tok.Text); idx >= 0 {
+						tokStart = idx
+					}
+				}
+
 				res, ok := dict.Lookup(tok.Text, tok.Tag)
 				if !ok || res.IsCoreVocabulary {
 					continue
@@ -334,6 +356,10 @@ func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary) []
 				counts[key]++
 				if _, exists := results[key]; !exists {
 					results[key] = res
+				}
+				if len(excerpts[key]) < maxExcerptsPerLexeme && tokStart >= 0 {
+					ex := buildExcerpt(ch.Title, clean, tokStart, tokStart+len(tok.Text))
+					excerpts[key] = append(excerpts[key], ex)
 				}
 			}
 		}
@@ -351,6 +377,7 @@ func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary) []
 			ShortDefinitions: res.ShortDefinitions,
 			TranslationsLT:   res.TranslationsLT,
 			OccurrenceCount:  counts[key],
+			Excerpts:         excerpts[key],
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -360,6 +387,62 @@ func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary) []
 		return out[i].POS < out[j].POS
 	})
 	return out
+}
+
+func buildExcerpt(chapter, clean string, start, end int) db.ExcerptInput {
+	surface := clean[start:end]
+	if len(clean) <= maxExcerptLength {
+		return db.ExcerptInput{
+			Chapter:        chapter,
+			SurfaceWord:    surface,
+			Text:           clean,
+			HighlightStart: start,
+			HighlightEnd:   end,
+		}
+	}
+
+	winStart := start - excerptRadius
+	if winStart < 0 {
+		winStart = 0
+	} else {
+		// Snap forward to the next space so we don't slice mid-word or mid-rune
+		if spaceIdx := strings.IndexByte(clean[winStart:start], ' '); spaceIdx >= 0 {
+			winStart = winStart + spaceIdx + 1
+		}
+	}
+
+	winEnd := end + excerptRadius
+	if winEnd > len(clean) {
+		winEnd = len(clean)
+	} else {
+		// Snap backward to the previous space so we don't slice mid-word or mid-rune
+		if spaceIdx := strings.LastIndexByte(clean[end:winEnd], ' '); spaceIdx >= 0 {
+			winEnd = end + spaceIdx
+		}
+	}
+
+	var b strings.Builder
+	offsetShift := 0
+	if winStart > 0 {
+		b.WriteString("...")
+		offsetShift = 3
+	}
+	b.WriteString(clean[winStart:winEnd])
+	if winEnd < len(clean) {
+		b.WriteString("...")
+	}
+
+	snippet := b.String()
+	hStart := (start - winStart) + offsetShift
+	hEnd := hStart + len(surface)
+
+	return db.ExcerptInput{
+		Chapter:        chapter,
+		SurfaceWord:    surface,
+		Text:           snippet,
+		HighlightStart: hStart,
+		HighlightEnd:   hEnd,
+	}
 }
 
 

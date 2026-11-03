@@ -300,6 +300,20 @@ func TestGetBookVocabularyEndpoint(t *testing.T) {
 	if page.Items[0].PromptForm != "laconic (adj.)" || len(page.Items[0].TranslationsLT) != 1 || page.Items[0].TranslationsLT[0] != "lakoniškas" {
 		t.Errorf("unexpected first item fields: %+v", page.Items[0])
 	}
+	if len(page.Items[0].Excerpts) != 2 {
+		t.Fatalf("expected 2 excerpts for 'laconic' in Book 1, got %d", len(page.Items[0].Excerpts))
+	}
+	for i, ex := range page.Items[0].Excerpts {
+		if ex.Chapter != "Chapter 1" || ex.SurfaceWord != "laconic" {
+			t.Errorf("excerpt %d: unexpected chapter/surface_word: %+v", i, ex)
+		}
+		if ex.Text[ex.HighlightStart:ex.HighlightEnd] != "laconic" {
+			t.Errorf("excerpt %d: text[%d:%d] = %q, want 'laconic'", i, ex.HighlightStart, ex.HighlightEnd, ex.Text[ex.HighlightStart:ex.HighlightEnd])
+		}
+	}
+	if page.Items[0].Excerpts[0].HighlightStart == page.Items[0].Excerpts[1].HighlightStart {
+		t.Errorf("expected two distinct highlight positions for two occurrences of 'laconic', got %d", page.Items[0].Excerpts[0].HighlightStart)
+	}
 
 	// 2. Filter by pos=noun
 	nounResp, err := http.Get(ts.URL + "/api/books/1/vocabulary?pos=noun")

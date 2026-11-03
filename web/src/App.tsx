@@ -3,6 +3,7 @@ import {
   defaultApiClient,
   type ApiClient,
   type BookSummary,
+  type Excerpt,
   type VocabularyPage,
 } from './api';
 
@@ -172,6 +173,22 @@ interface BookVocabularyViewProps {
   onNavigate: (path: string) => void;
 }
 
+function renderHighlightedExcerpt(ex: Excerpt) {
+  const { text, highlight_start: start, highlight_end: end } = ex;
+  if (start >= 0 && end > start && end <= text.length) {
+    return (
+      <>
+        {text.slice(0, start)}
+        <mark style={{ backgroundColor: '#fff2a8', padding: '0 2px', borderRadius: '2px' }}>
+          {text.slice(start, end)}
+        </mark>
+        {text.slice(end)}
+      </>
+    );
+  }
+  return <>{text}</>;
+}
+
 function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyViewProps) {
   const [pageData, setPageData] = useState<VocabularyPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -179,6 +196,14 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
   const [page, setPage] = useState(1);
   const [pos, setPos] = useState('');
   const [search, setSearch] = useState('');
+  const [expandedContextIds, setExpandedContextIds] = useState<Record<number, boolean>>({});
+
+  const toggleContext = (id: number) => {
+    setExpandedContextIds((prev) => ({
+      ...prev,
+      [id]: !prev[id],
+    }));
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -356,9 +381,76 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
                   backgroundColor: '#fafafa',
                   padding: '0.6rem 0.75rem',
                   borderRadius: '6px',
+                  marginBottom: '0.6rem',
                 }}
               >
                 {item.full_definition}
+              </div>
+
+              <div>
+                <button
+                  type="button"
+                  aria-expanded={Boolean(expandedContextIds[item.id])}
+                  onClick={() => toggleContext(item.id)}
+                  style={{
+                    background: 'none',
+                    border: '1px solid #ccd4e0',
+                    borderRadius: '4px',
+                    padding: '0.25rem 0.6rem',
+                    fontSize: '0.85rem',
+                    color: '#0b57d0',
+                    cursor: 'pointer',
+                  }}
+                >
+                  View in context ({item.excerpts?.length ?? 0})
+                </button>
+
+                {expandedContextIds[item.id] && (
+                  <div style={{ marginTop: '0.75rem' }}>
+                    {item.excerpts && item.excerpts.length > 0 ? (
+                      <ul
+                        style={{
+                          listStyle: 'none',
+                          padding: 0,
+                          margin: 0,
+                          display: 'grid',
+                          gap: '0.5rem',
+                        }}
+                      >
+                        {item.excerpts.map((ex, idx) => (
+                          <li
+                            key={ex.id || idx}
+                            style={{
+                              borderLeft: '3px solid #0b57d0',
+                              backgroundColor: '#f8fafd',
+                              padding: '0.5rem 0.75rem',
+                              fontSize: '0.9rem',
+                              borderRadius: '0 4px 4px 0',
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontSize: '0.78rem',
+                                fontWeight: 600,
+                                color: '#555',
+                                marginBottom: '0.25rem',
+                              }}
+                            >
+                              {ex.chapter}
+                            </div>
+                            <div style={{ color: '#222', lineHeight: 1.45 }}>
+                              {renderHighlightedExcerpt(ex)}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>
+                        No excerpts stored for this lexeme.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             </li>
           ))}

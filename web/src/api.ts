@@ -12,6 +12,15 @@ export interface BookSummary {
   mastery_distribution: Record<string, number>;
 }
 
+export interface Excerpt {
+  id: number;
+  chapter: string;
+  surface_word: string;
+  text: string;
+  highlight_start: number;
+  highlight_end: number;
+}
+
 export interface VocabularyEntry {
   id: number;
   lemma: string;
@@ -31,6 +40,7 @@ export interface VocabularyEntry {
   translations_lt: string[];
   mastery_level: number;
   known: boolean;
+  excerpts?: Excerpt[];
 }
 
 export interface VocabularyPage {
