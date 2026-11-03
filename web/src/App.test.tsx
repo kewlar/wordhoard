@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { App } from './App';
+import { App, evaluateQuizAnswer, normalizeQuizAnswer } from './App';
 import type { ApiClient, BookSummary, VocabularyPage } from './api';
 
 const sampleBook: BookSummary = {
@@ -302,6 +302,194 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     // Click again to collapse
     await user.click(toggleButtons[0]!);
     expect(screen.queryByText('Chapter 3')).not.toBeInTheDocument();
+  });
+
+  it('supports toggling global Known Status on a lexeme and filtering known lexemes in Book Vocabulary Browser', async () => {
+    const user = userEvent.setup();
+    window.history.pushState({}, '', '/books/1/vocabulary');
+
+    const patchLexeme = vi.fn(async (id: number, patch: { known?: boolean }) => ({
+      id,
+      lemma: 'laconic',
+      pos: 'adjective',
+      mastery_level: 0,
+      known: Boolean(patch.known),
+    }));
+
+    const getBookVocabulary = vi.fn(async (_bookId: number, query) => {
+      if (query?.includeKnown) {
+        return {
+          ...sampleVocabularyPage,
+          items: [
+            { ...sampleVocabularyPage.items[0]!, known: true },
+            sampleVocabularyPage.items[1]!,
+          ],
+        };
+      }
+      return sampleVocabularyPage;
+    });
+
+    const client: ApiClient = {
+      listBooks: async () => [sampleBook],
+      getBookVocabulary,
+      patchLexeme,
+    };
+
+    render(<App apiClient={client} />);
+
+    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    expect(screen.getAllByText(/mastery:\s*0\s*\/\s*5/i).length).toBeGreaterThanOrEqual(1);
+
+    // Click "Already Known / Ignore" on first item
+    const knownButtons = screen.getAllByRole('button', { name: /already known/i });
+    await user.click(knownButtons[0]!);
+
+    expect(patchLexeme).toHaveBeenCalledWith(101, { known: true });
+
+    // Toggle "Show known lexemes" filter
+    const showKnownCheckbox = screen.getByRole('checkbox', { name: /show known/i });
+    await user.click(showKnownCheckbox);
+
+    await waitFor(() => {
+      expect(getBookVocabulary).toHaveBeenLastCalledWith(
+        1,
+        expect.objectContaining({ includeKnown: true, page: 1 })
+      );
+    });
+  });
+
+  it('completes a full keyboard-first Book Quiz with answer normalization, queue re-cycling, and single first-attempt mastery calls', async () => {
+    const user = userEvent.setup();
+    window.history.pushState({}, '', '/');
+
+    const startBookQuiz = vi.fn(async () => ({
+      book: sampleBook,
+      items: sampleVocabularyPage.items,
+    }));
+
+    const recordLexemeAttempt = vi.fn(async (id: number, body: { first_attempt_correct: boolean }) => ({
+      id,
+      lemma: id === 101 ? 'laconic' : 'obfuscate',
+      pos: id === 101 ? 'adjective' : 'verb',
+      mastery_level: body.first_attempt_correct ? 1 : 0,
+      known: false,
+    }));
+
+    const client: ApiClient = {
+      listBooks: async () => [sampleBook],
+      getBookVocabulary: async () => sampleVocabularyPage,
+      startBookQuiz,
+      recordLexemeAttempt,
+    };
+
+    // Pass identity shuffle so quiz order is deterministically [laconic (101), obfuscate (102)]
+    render(<App apiClient={client} shuffleQuizItems={(items) => [...items]} />);
+
+    // Navigate to Book Quiz from Books List
+    const startQuizLink = await screen.findByRole('link', { name: /start quiz/i });
+    await user.click(startQuizLink);
+
+    expect(window.location.pathname).toBe('/books/1/quiz');
+    expect(startBookQuiz).toHaveBeenCalledWith(1);
+
+    // Prompt 1: "laconic (adj.)"
+    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    expect(screen.getByText('0 / 2')).toBeInTheDocument();
+
+    // Answer input must be automatically focused
+    const answerInput1 = screen.getByRole('textbox', { name: /your answer/i });
+    expect(answerInput1).toHaveFocus();
+
+    // Press Enter on empty input -> skipped / graded as Incorrect
+    await user.keyboard('{Enter}');
+
+    // First attempt on 101 immediately dispatches POST /api/lexemes/101/attempt with false
+    await waitFor(() => {
+      expect(recordLexemeAttempt).toHaveBeenCalledTimes(1);
+      expect(recordLexemeAttempt).toHaveBeenCalledWith(101, { first_attempt_correct: false });
+    });
+
+    // Reveal screen shows Incorrect, definitions, translations, collapsible excerpt, progress stays 0 / 2
+    expect(await screen.findByText(/incorrect/i)).toBeInTheDocument();
+    expect(screen.getByText('0 / 2')).toBeInTheDocument();
+    expect(screen.getByText(/lakoniškas, glaustas/i)).toBeInTheDocument();
+    expect(screen.getByText(/concise, terse/i)).toBeInTheDocument();
+
+    // "Next" button must be automatically focused on reveal screen
+    const nextBtn1 = screen.getByRole('button', { name: /^next$/i });
+    expect(nextBtn1).toHaveFocus();
+
+    // Press Enter to advance to next word ("to obfuscate")
+    await user.keyboard('{Enter}');
+
+    expect(await screen.findByText('to obfuscate')).toBeInTheDocument();
+    const answerInput2 = screen.getByRole('textbox', { name: /your answer/i });
+    expect(answerInput2).toHaveFocus();
+
+    // Type an answer with leading "to ", uppercase, extra spaces, and punctuation -> should normalize to "obscure" and be graded Correct!
+    await user.keyboard('  To   Obscure!  {Enter}');
+
+    // First attempt on 102 immediately dispatches POST /api/lexemes/102/attempt with true
+    await waitFor(() => {
+      expect(recordLexemeAttempt).toHaveBeenCalledTimes(2);
+      expect(recordLexemeAttempt).toHaveBeenLastCalledWith(102, { first_attempt_correct: true });
+    });
+
+    // Reveal screen shows Correct, progress advances to 1 / 2, and "Next" button is focused
+    expect(await screen.findByText(/^correct$/i)).toBeInTheDocument();
+    expect(screen.getByText('1 / 2')).toBeInTheDocument();
+    const nextBtn2 = screen.getByRole('button', { name: /^next$/i });
+    expect(nextBtn2).toHaveFocus();
+
+    // Press Enter to advance to re-queued word ("laconic (adj.)")
+    await user.keyboard('{Enter}');
+
+    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    const answerInput3 = screen.getByRole('textbox', { name: /your answer/i });
+    expect(answerInput3).toHaveFocus();
+
+    // Answer with Lithuanian translation ("  LAKONIŠKAS. ")
+    await user.keyboard('  LAKONIŠKAS. {Enter}');
+
+    // Reveal screen shows Correct, progress reaches 2 / 2
+    expect(await screen.findByText(/^correct$/i)).toBeInTheDocument();
+    expect(screen.getByText('2 / 2')).toBeInTheDocument();
+
+    // IMPORTANT: recordLexemeAttempt must NOT be called a second time for lexeme 101!
+    expect(recordLexemeAttempt).toHaveBeenCalledTimes(2);
+
+    // Since queue is now empty, "Finish" button is shown and automatically focused
+    const finishBtn = screen.getByRole('button', { name: /^finish$/i });
+    expect(finishBtn).toHaveFocus();
+
+    // Press Enter on "Finish" -> navigates to /books/1/vocabulary
+    await user.keyboard('{Enter}');
+    expect(window.location.pathname).toBe('/books/1/vocabulary');
+  });
+
+  it('normalizes capitalization, whitespace, punctuation, and leading English articles/particles ("to ", "a ", "an ") while rejecting empty answers', () => {
+    expect(normalizeQuizAnswer('  To   Shorten! ')).toBe('shorten');
+    expect(normalizeQuizAnswer('A "riddle"...')).toBe('riddle');
+    expect(normalizeQuizAnswer('An enigma?')).toBe('enigma');
+    expect(normalizeQuizAnswer('   ')).toBe('');
+    expect(normalizeQuizAnswer('...!?')).toBe('');
+
+    const lexeme = {
+      translations_lt: ['lakoniškas', 'glaustas'],
+      short_definitions: ['to shorten', 'a riddle', 'an enigma', 'concise'],
+    };
+
+    expect(evaluateQuizAnswer('shorten', lexeme)).toBe(true);
+    expect(evaluateQuizAnswer('TO SHORTEN', lexeme)).toBe(true);
+    expect(evaluateQuizAnswer('riddle', lexeme)).toBe(true);
+    expect(evaluateQuizAnswer('a riddle!', lexeme)).toBe(true);
+    expect(evaluateQuizAnswer('enigma', lexeme)).toBe(true);
+    expect(evaluateQuizAnswer('an enigma', lexeme)).toBe(true);
+    expect(evaluateQuizAnswer('  Glaustas, ', lexeme)).toBe(true);
+    expect(evaluateQuizAnswer('', lexeme)).toBe(false);
+    expect(evaluateQuizAnswer('   ', lexeme)).toBe(false);
+    expect(evaluateQuizAnswer('to ', lexeme)).toBe(false);
+    expect(evaluateQuizAnswer('unrelated', lexeme)).toBe(false);
   });
 });
 

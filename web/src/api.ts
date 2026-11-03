@@ -57,11 +57,35 @@ export interface VocabularyQuery {
   pageSize?: number;
   pos?: string;
   search?: string;
+  includeKnown?: boolean;
+}
+
+export interface LexemeStatus {
+  id: number;
+  lemma: string;
+  pos: string;
+  mastery_level: number;
+  known: boolean;
+  last_quizzed_at?: string;
+}
+
+export interface QuizSession {
+  book?: BookSummary;
+  items: VocabularyEntry[];
 }
 
 export interface ApiClient {
   listBooks(): Promise<BookSummary[]>;
   getBookVocabulary?(bookId: number, query?: VocabularyQuery): Promise<VocabularyPage>;
+  patchLexeme?(
+    lexemeId: number,
+    patch: { known?: boolean; mastery_level?: number }
+  ): Promise<LexemeStatus>;
+  startBookQuiz?(bookId: number, size?: number): Promise<QuizSession>;
+  recordLexemeAttempt?(
+    lexemeId: number,
+    attempt: { first_attempt_correct: boolean }
+  ): Promise<LexemeStatus>;
 }
 
 export const defaultApiClient: ApiClient = {
@@ -88,6 +112,9 @@ export const defaultApiClient: ApiClient = {
     if (query.search) {
       params.set('search', query.search);
     }
+    if (query.includeKnown) {
+      params.set('include_known', 'true');
+    }
     const qs = params.toString();
     const url = `/api/books/${bookId}/vocabulary${qs ? `?${qs}` : ''}`;
     const res = await fetch(url);
@@ -95,6 +122,48 @@ export const defaultApiClient: ApiClient = {
       throw new Error(`Failed to fetch book vocabulary (${res.status})`);
     }
     return (await res.json()) as VocabularyPage;
+  },
+
+  async patchLexeme(
+    lexemeId: number,
+    patch: { known?: boolean; mastery_level?: number }
+  ): Promise<LexemeStatus> {
+    const res = await fetch(`/api/lexemes/${lexemeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to update lexeme (${res.status})`);
+    }
+    return (await res.json()) as LexemeStatus;
+  },
+
+  async startBookQuiz(bookId: number, size = 20): Promise<QuizSession> {
+    const res = await fetch(`/api/books/${bookId}/quiz`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ size }),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to start book quiz (${res.status})`);
+    }
+    return (await res.json()) as QuizSession;
+  },
+
+  async recordLexemeAttempt(
+    lexemeId: number,
+    attempt: { first_attempt_correct: boolean }
+  ): Promise<LexemeStatus> {
+    const res = await fetch(`/api/lexemes/${lexemeId}/attempt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(attempt),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to record lexeme attempt (${res.status})`);
+    }
+    return (await res.json()) as LexemeStatus;
   },
 };
 

@@ -28,6 +28,9 @@ func NewHandler(store *db.Store, spaFS fs.FS) http.Handler {
 	s.mux.HandleFunc("GET /api/books", s.handleListBooks)
 	s.mux.HandleFunc("GET /api/books/{id}", s.handleGetBook)
 	s.mux.HandleFunc("GET /api/books/{id}/vocabulary", s.handleGetBookVocabulary)
+	s.mux.HandleFunc("POST /api/books/{id}/quiz", s.handleCreateBookQuiz)
+	s.mux.HandleFunc("PATCH /api/lexemes/{id}", s.handlePatchLexeme)
+	s.mux.HandleFunc("POST /api/lexemes/{id}/attempt", s.handlePostLexemeAttempt)
 	s.mux.HandleFunc("/", s.handleSPA)
 	return s.mux
 }
@@ -84,11 +87,17 @@ func (s *Server) handleGetBookVocabulary(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	includeKnown := false
+	if ikStr := strings.ToLower(strings.TrimSpace(q.Get("include_known"))); ikStr == "true" || ikStr == "1" {
+		includeKnown = true
+	}
+
 	vocabPage, err := s.store.ListBookVocabulary(id, db.VocabularyFilter{
-		Page:     page,
-		PageSize: pageSize,
-		POS:      q.Get("pos"),
-		Search:   q.Get("search"),
+		Page:         page,
+		PageSize:     pageSize,
+		POS:          q.Get("pos"),
+		Search:       q.Get("search"),
+		IncludeKnown: includeKnown,
 	})
 	if errors.Is(err, db.ErrBookNotFound) {
 		writeJSONError(w, http.StatusNotFound, "book not found")
@@ -100,6 +109,98 @@ func (s *Server) handleGetBookVocabulary(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, vocabPage)
+}
+
+func (s *Server) handleCreateBookQuiz(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid book id")
+		return
+	}
+
+	size := 20
+	if qSize := r.URL.Query().Get("size"); qSize != "" {
+		if parsed, parseErr := strconv.Atoi(qSize); parseErr == nil && parsed > 0 {
+			size = parsed
+		}
+	}
+	if r.Body != nil {
+		var body struct {
+			Size int `json:"size"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.Size > 0 {
+			size = body.Size
+		}
+	}
+
+	session, err := s.store.SelectQuizCandidates(id, size)
+	if errors.Is(err, db.ErrBookNotFound) {
+		writeJSONError(w, http.StatusNotFound, "book not found")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, session)
+}
+
+func (s *Server) handlePatchLexeme(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid lexeme id")
+		return
+	}
+
+	var body struct {
+		Known        *bool `json:"known"`
+		MasteryLevel *int  `json:"mastery_level"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	updated, err := s.store.UpdateLexeme(id, body.Known, body.MasteryLevel)
+	if errors.Is(err, db.ErrLexemeNotFound) {
+		writeJSONError(w, http.StatusNotFound, "lexeme not found")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handlePostLexemeAttempt(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid lexeme id")
+		return
+	}
+
+	var body struct {
+		FirstAttemptCorrect *bool `json:"first_attempt_correct"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.FirstAttemptCorrect == nil {
+		writeJSONError(w, http.StatusBadRequest, "first_attempt_correct is required")
+		return
+	}
+
+	updated, err := s.store.RecordLexemeAttempt(id, *body.FirstAttemptCorrect)
+	if errors.Is(err, db.ErrLexemeNotFound) {
+		writeJSONError(w, http.StatusNotFound, "lexeme not found")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, updated)
 }
 
 

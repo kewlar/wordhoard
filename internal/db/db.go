@@ -10,7 +10,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var ErrBookNotFound = errors.New("book not found")
+var (
+	ErrBookNotFound   = errors.New("book not found")
+	ErrLexemeNotFound = errors.New("lexeme not found")
+)
 
 
 type Book struct {
@@ -88,10 +91,25 @@ type VocabularyEntry struct {
 }
 
 type VocabularyFilter struct {
-	Page     int
-	PageSize int
-	POS      string
-	Search   string
+	Page         int
+	PageSize     int
+	POS          string
+	Search       string
+	IncludeKnown bool
+}
+
+type LexemeStatus struct {
+	ID            int64  `json:"id"`
+	Lemma         string `json:"lemma"`
+	POS           string `json:"pos"`
+	MasteryLevel  int    `json:"mastery_level"`
+	Known         bool   `json:"known"`
+	LastQuizzedAt string `json:"last_quizzed_at,omitempty"`
+}
+
+type QuizSession struct {
+	Book  *Book             `json:"book"`
+	Items []VocabularyEntry `json:"items"`
 }
 
 type VocabularyPage struct {
@@ -526,6 +544,10 @@ func (s *Store) ListBookVocabulary(bookID int64, filter VocabularyFilter) (Vocab
 	whereClauses = append(whereClauses, "bl.book_id = ?")
 	args = append(args, bookID)
 
+	if !filter.IncludeKnown {
+		whereClauses = append(whereClauses, "l.known = 0")
+	}
+
 	posFilter := strings.ToLower(strings.TrimSpace(filter.POS))
 	if posFilter != "" {
 		whereClauses = append(whereClauses, "l.pos = ?")
@@ -684,6 +706,219 @@ func (s *Store) ListBookVocabulary(bookID int64, filter VocabularyFilter) (Vocab
 		Page:       page,
 		PageSize:   pageSize,
 		TotalPages: totalPages,
+	}, nil
+}
+
+func (s *Store) getLexemeStatus(lexemeID int64) (*LexemeStatus, error) {
+	var st LexemeStatus
+	err := s.db.QueryRow(`
+		SELECT id, lemma, pos, mastery_level, known, COALESCE(last_quizzed_at, '')
+		FROM lexemes
+		WHERE id = ?
+	`, lexemeID).Scan(&st.ID, &st.Lemma, &st.POS, &st.MasteryLevel, &st.Known, &st.LastQuizzedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrLexemeNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
+
+func (s *Store) UpdateLexeme(lexemeID int64, known *bool, masteryLevel *int) (*LexemeStatus, error) {
+	st, err := s.getLexemeStatus(lexemeID)
+	if err != nil {
+		return nil, err
+	}
+
+	newKnown := st.Known
+	if known != nil {
+		newKnown = *known
+	}
+	newMastery := st.MasteryLevel
+	if masteryLevel != nil {
+		newMastery = *masteryLevel
+		if newMastery < 0 {
+			newMastery = 0
+		}
+		if newMastery > 5 {
+			newMastery = 5
+		}
+	}
+
+	if _, err := s.db.Exec(
+		`UPDATE lexemes SET known = ?, mastery_level = ? WHERE id = ?`,
+		newKnown, newMastery, lexemeID,
+	); err != nil {
+		return nil, err
+	}
+	return s.getLexemeStatus(lexemeID)
+}
+
+func (s *Store) RecordLexemeAttempt(lexemeID int64, firstAttemptCorrect bool) (*LexemeStatus, error) {
+	st, err := s.getLexemeStatus(lexemeID)
+	if err != nil {
+		return nil, err
+	}
+
+	newMastery := 0
+	if firstAttemptCorrect {
+		newMastery = st.MasteryLevel + 1
+		if newMastery > 5 {
+			newMastery = 5
+		}
+	}
+
+	if _, err := s.db.Exec(
+		`UPDATE lexemes SET mastery_level = ?, last_quizzed_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		newMastery, lexemeID,
+	); err != nil {
+		return nil, err
+	}
+	return s.getLexemeStatus(lexemeID)
+}
+
+func (s *Store) SelectQuizCandidates(bookID int64, size int) (QuizSession, error) {
+	book, err := s.GetBook(bookID)
+	if err != nil {
+		return QuizSession{}, err
+	}
+
+	if size <= 0 {
+		size = 20
+	}
+	if size > 200 {
+		size = 200
+	}
+
+	rows, err := s.db.Query(`
+		WITH tb AS (
+			SELECT COUNT(*) AS total_books FROM books
+		),
+		lc AS (
+			SELECT lexeme_id, COUNT(*) AS books_with_lexeme
+			FROM book_lexemes
+			GROUP BY lexeme_id
+		)
+		SELECT
+			l.id,
+			l.lemma,
+			l.pos,
+			l.prompt_form,
+			COALESCE(l.cefr_level, ''),
+			max(0.0, 5.0 - l.global_zipf_freq) AS global_rarity,
+			ln(1.0 + CAST(tb.total_books AS REAL) / CAST(lc.books_with_lexeme AS REAL)) AS library_idf,
+			ln(1.0 + CAST(bl.occurrence_count AS REAL)) AS book_salience,
+			(
+				max(0.0, 5.0 - l.global_zipf_freq)
+				+ ln(1.0 + CAST(tb.total_books AS REAL) / CAST(lc.books_with_lexeme AS REAL))
+				+ ln(1.0 + CAST(bl.occurrence_count AS REAL))
+			) AS obscurity_score,
+			l.global_zipf_freq,
+			bl.occurrence_count,
+			lc.books_with_lexeme,
+			tb.total_books,
+			l.full_definition,
+			l.short_definitions_json,
+			l.translations_lt_json,
+			l.mastery_level,
+			l.known
+		FROM book_lexemes bl
+		JOIN lexemes l ON l.id = bl.lexeme_id
+		JOIN lc ON lc.lexeme_id = l.id
+		CROSS JOIN tb
+		WHERE bl.book_id = ? AND l.known = 0 AND l.mastery_level < 5
+		ORDER BY
+			l.mastery_level ASC,
+			CASE
+				WHEN l.last_quizzed_at IS NULL OR datetime(l.last_quizzed_at) <= datetime('now', '-15 minutes') THEN 0
+				ELSE 1
+			END ASC,
+			obscurity_score DESC,
+			COALESCE(l.last_quizzed_at, '') ASC,
+			l.lemma ASC,
+			l.pos ASC
+		LIMIT ?
+	`, bookID, size)
+	if err != nil {
+		return QuizSession{}, err
+	}
+	defer rows.Close()
+
+	items := make([]VocabularyEntry, 0)
+	for rows.Next() {
+		var entry VocabularyEntry
+		var shortJSON, ltJSON string
+		if err := rows.Scan(
+			&entry.ID,
+			&entry.Lemma,
+			&entry.POS,
+			&entry.PromptForm,
+			&entry.CEFRLevel,
+			&entry.GlobalRarity,
+			&entry.LibraryIDF,
+			&entry.BookSalience,
+			&entry.ObscurityScore,
+			&entry.GlobalZipfFreq,
+			&entry.OccurrenceCount,
+			&entry.BooksWithLexeme,
+			&entry.TotalBooks,
+			&entry.FullDefinition,
+			&shortJSON,
+			&ltJSON,
+			&entry.MasteryLevel,
+			&entry.Known,
+		); err != nil {
+			return QuizSession{}, err
+		}
+		if err := json.Unmarshal([]byte(shortJSON), &entry.ShortDefinitions); err != nil || entry.ShortDefinitions == nil {
+			entry.ShortDefinitions = []string{}
+		}
+		if err := json.Unmarshal([]byte(ltJSON), &entry.TranslationsLT); err != nil || entry.TranslationsLT == nil {
+			entry.TranslationsLT = []string{}
+		}
+		entry.Excerpts = []Excerpt{}
+		items = append(items, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return QuizSession{}, err
+	}
+
+	if len(items) > 0 {
+		exRows, err := s.db.Query(`
+			SELECT id, lexeme_id, chapter, surface_word, text, highlight_start, highlight_end
+			FROM excerpts
+			WHERE book_id = ?
+			ORDER BY id ASC
+		`, bookID)
+		if err != nil {
+			return QuizSession{}, err
+		}
+		defer exRows.Close()
+
+		byLexeme := make(map[int64][]Excerpt)
+		for exRows.Next() {
+			var ex Excerpt
+			var lexID int64
+			if err := exRows.Scan(&ex.ID, &lexID, &ex.Chapter, &ex.SurfaceWord, &ex.Text, &ex.HighlightStart, &ex.HighlightEnd); err != nil {
+				return QuizSession{}, err
+			}
+			byLexeme[lexID] = append(byLexeme[lexID], ex)
+		}
+		if err := exRows.Err(); err != nil {
+			return QuizSession{}, err
+		}
+
+		for i := range items {
+			if exList, ok := byLexeme[items[i].ID]; ok {
+				items[i].Excerpts = exList
+			}
+		}
+	}
+
+	return QuizSession{
+		Book:  book,
+		Items: items,
 	}, nil
 }
 

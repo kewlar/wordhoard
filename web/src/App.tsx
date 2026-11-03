@@ -1,29 +1,81 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   defaultApiClient,
   type ApiClient,
   type BookSummary,
   type Excerpt,
+  type VocabularyEntry,
   type VocabularyPage,
+  type VocabularyQuery,
 } from './api';
 
 export interface AppProps {
   apiClient?: ApiClient;
+  shuffleQuizItems?: (items: VocabularyEntry[]) => VocabularyEntry[];
 }
 
 type Route =
   | { kind: 'books' }
-  | { kind: 'vocabulary'; bookId: number };
+  | { kind: 'vocabulary'; bookId: number }
+  | { kind: 'quiz'; bookId: number };
 
 function parseRoute(pathname: string): Route {
-  const match = /^\/books\/(\d+)\/vocabulary\/?$/.exec(pathname);
-  if (match) {
-    return { kind: 'vocabulary', bookId: Number(match[1]) };
+  const vocabMatch = /^\/books\/(\d+)\/vocabulary\/?$/.exec(pathname);
+  if (vocabMatch) {
+    return { kind: 'vocabulary', bookId: Number(vocabMatch[1]) };
+  }
+  const quizMatch = /^\/books\/(\d+)\/quiz\/?$/.exec(pathname);
+  if (quizMatch) {
+    return { kind: 'quiz', bookId: Number(quizMatch[1]) };
   }
   return { kind: 'books' };
 }
 
-export function App({ apiClient = defaultApiClient }: AppProps) {
+export function normalizeQuizAnswer(raw: string): string {
+  const cleaned = raw
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) {
+    return '';
+  }
+  return cleaned.replace(/^(?:to|a|an)\s+/i, '').trim();
+}
+
+export function evaluateQuizAnswer(
+  userInput: string,
+  lexeme: Pick<VocabularyEntry, 'translations_lt' | 'short_definitions'>
+): boolean {
+  const normalizedInput = normalizeQuizAnswer(userInput);
+  if (!normalizedInput) {
+    return false;
+  }
+  const candidates = [...(lexeme.translations_lt ?? []), ...(lexeme.short_definitions ?? [])];
+  return candidates.some((candidate) => {
+    const normalizedCandidate = normalizeQuizAnswer(candidate);
+    return normalizedCandidate.length > 0 && normalizedCandidate === normalizedInput;
+  });
+}
+
+export function shuffleQuizBatch(
+  items: VocabularyEntry[],
+  rng: () => number = Math.random
+): VocabularyEntry[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = copy[i]!;
+    copy[i] = copy[j]!;
+    copy[j] = tmp;
+  }
+  return copy;
+}
+
+export function App({
+  apiClient = defaultApiClient,
+  shuffleQuizItems = shuffleQuizBatch,
+}: AppProps) {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.pathname));
 
   useEffect(() => {
@@ -60,13 +112,22 @@ export function App({ apiClient = defaultApiClient }: AppProps) {
       </header>
 
       <main>
-        {route.kind === 'books' ? (
+        {route.kind === 'books' && (
           <BooksListView apiClient={apiClient} onNavigate={navigate} />
-        ) : (
+        )}
+        {route.kind === 'vocabulary' && (
           <BookVocabularyView
             apiClient={apiClient}
             bookId={route.bookId}
             onNavigate={navigate}
+          />
+        )}
+        {route.kind === 'quiz' && (
+          <BookQuizView
+            apiClient={apiClient}
+            bookId={route.bookId}
+            onNavigate={navigate}
+            shuffleQuizItems={shuffleQuizItems}
           />
         )}
       </main>
@@ -125,6 +186,7 @@ function BooksListView({ apiClient, onNavigate }: BooksListViewProps) {
         <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '1rem' }}>
           {books.map((book) => {
             const vocabHref = `/books/${book.id}/vocabulary`;
+            const quizHref = `/books/${book.id}/quiz`;
             return (
               <li
                 key={book.id}
@@ -135,6 +197,8 @@ function BooksListView({ apiClient, onNavigate }: BooksListViewProps) {
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
+                  gap: '1rem',
+                  flexWrap: 'wrap',
                 }}
               >
                 <div>
@@ -152,11 +216,31 @@ function BooksListView({ apiClient, onNavigate }: BooksListViewProps) {
                   </h3>
                   <p style={{ margin: '0.25rem 0 0', color: '#555' }}>{book.author}</p>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontWeight: 600 }}>{book.total_lexemes} lexemes</div>
-                  <div style={{ fontSize: '0.85rem', color: '#666' }}>
-                    {book.mastered_count} mastered · {book.known_count} known
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontWeight: 600 }}>{book.total_lexemes} lexemes</div>
+                    <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                      {book.mastered_count} mastered · {book.known_count} known
+                    </div>
                   </div>
+                  <a
+                    href={quizHref}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      onNavigate(quizHref);
+                    }}
+                    style={{
+                      padding: '0.45rem 0.85rem',
+                      borderRadius: '6px',
+                      backgroundColor: '#0b57d0',
+                      color: '#fff',
+                      textDecoration: 'none',
+                      fontSize: '0.9rem',
+                      fontWeight: 500,
+                    }}
+                  >
+                    Start Quiz
+                  </a>
                 </div>
               </li>
             );
@@ -196,6 +280,8 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
   const [page, setPage] = useState(1);
   const [pos, setPos] = useState('');
   const [search, setSearch] = useState('');
+  const [includeKnown, setIncludeKnown] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
   const [expandedContextIds, setExpandedContextIds] = useState<Record<number, boolean>>({});
 
   const toggleContext = (id: number) => {
@@ -209,12 +295,16 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
     let cancelled = false;
     const fetchVocab = apiClient.getBookVocabulary ?? defaultApiClient.getBookVocabulary!;
     setLoading(true);
-    fetchVocab(bookId, {
+    const query: VocabularyQuery = {
       page,
       pageSize: 50,
       pos,
       search,
-    })
+    };
+    if (includeKnown) {
+      query.includeKnown = true;
+    }
+    fetchVocab(bookId, query)
       .then((res) => {
         if (!cancelled) {
           setPageData(res);
@@ -234,14 +324,29 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
     return () => {
       cancelled = true;
     };
-  }, [apiClient, bookId, page, pos, search]);
+  }, [apiClient, bookId, page, pos, search, includeKnown, refreshTick]);
+
+  const handleToggleKnown = async (item: VocabularyEntry) => {
+    const patchFn = apiClient.patchLexeme ?? defaultApiClient.patchLexeme!;
+    const nextKnown = !item.known;
+    await patchFn(item.id, { known: nextKnown });
+    setRefreshTick((t) => t + 1);
+  };
 
   const items = pageData?.items ?? [];
   const totalPages = pageData?.total_pages ?? 0;
+  const quizHref = `/books/${bookId}/quiz`;
 
   return (
     <section>
-      <div style={{ marginBottom: '1rem' }}>
+      <div
+        style={{
+          marginBottom: '1rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
         <a
           href="/"
           onClick={(e) => {
@@ -252,13 +357,33 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
         >
           ← Back to Books
         </a>
+
+        <a
+          href={quizHref}
+          onClick={(e) => {
+            e.preventDefault();
+            onNavigate(quizHref);
+          }}
+          style={{
+            padding: '0.45rem 0.85rem',
+            borderRadius: '6px',
+            backgroundColor: '#0b57d0',
+            color: '#fff',
+            textDecoration: 'none',
+            fontSize: '0.9rem',
+            fontWeight: 500,
+          }}
+        >
+          Start Quiz
+        </a>
       </div>
 
       {pageData?.book && (
         <div style={{ marginBottom: '1.25rem' }}>
           <h2 style={{ margin: 0, fontSize: '1.4rem' }}>{pageData.book.title}</h2>
           <p style={{ margin: '0.25rem 0 0', color: '#555' }}>
-            {pageData.book.author} · {pageData.book.total_lexemes} learnable lexemes
+            {pageData.book.author} · {pageData.book.total_lexemes} learnable lexemes ·{' '}
+            {pageData.book.mastered_count} mastered · {pageData.book.known_count} known
           </p>
         </div>
       )}
@@ -304,6 +429,18 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
             <option value="adverb">adverb</option>
           </select>
         </label>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={includeKnown}
+            onChange={(e) => {
+              setIncludeKnown(e.target.checked);
+              setPage(1);
+            }}
+          />
+          <span>Show known lexemes</span>
+        </label>
       </div>
 
       {loading && <p>Loading vocabulary...</p>}
@@ -322,6 +459,7 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
                 border: '1px solid #ddd',
                 borderRadius: '8px',
                 padding: '1rem 1.25rem',
+                backgroundColor: item.known ? '#f9f9f9' : '#fff',
               }}
             >
               <div
@@ -347,6 +485,18 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
                     }}
                   >
                     {item.pos}
+                  </span>
+                  <span
+                    style={{
+                      marginLeft: '0.5rem',
+                      fontSize: '0.8rem',
+                      padding: '0.15rem 0.45rem',
+                      borderRadius: '4px',
+                      backgroundColor: '#eef7ee',
+                      color: '#1e5e1e',
+                    }}
+                  >
+                    Mastery: {item.mastery_level} / 5
                   </span>
                 </div>
                 <div style={{ fontSize: '0.85rem', color: '#444' }}>
@@ -387,7 +537,7 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
                 {item.full_definition}
               </div>
 
-              <div>
+              <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
                 <button
                   type="button"
                   aria-expanded={Boolean(expandedContextIds[item.id])}
@@ -405,53 +555,69 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
                   View in context ({item.excerpts?.length ?? 0})
                 </button>
 
-                {expandedContextIds[item.id] && (
-                  <div style={{ marginTop: '0.75rem' }}>
-                    {item.excerpts && item.excerpts.length > 0 ? (
-                      <ul
-                        style={{
-                          listStyle: 'none',
-                          padding: 0,
-                          margin: 0,
-                          display: 'grid',
-                          gap: '0.5rem',
-                        }}
-                      >
-                        {item.excerpts.map((ex, idx) => (
-                          <li
-                            key={ex.id || idx}
+                <button
+                  type="button"
+                  onClick={() => void handleToggleKnown(item)}
+                  style={{
+                    background: item.known ? '#eee' : 'none',
+                    border: '1px solid #ccd4e0',
+                    borderRadius: '4px',
+                    padding: '0.25rem 0.6rem',
+                    fontSize: '0.85rem',
+                    color: '#444',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {item.known ? 'Known (Unmark)' : 'Already Known / Ignore'}
+                </button>
+              </div>
+
+              {expandedContextIds[item.id] && (
+                <div style={{ marginTop: '0.75rem' }}>
+                  {item.excerpts && item.excerpts.length > 0 ? (
+                    <ul
+                      style={{
+                        listStyle: 'none',
+                        padding: 0,
+                        margin: 0,
+                        display: 'grid',
+                        gap: '0.5rem',
+                      }}
+                    >
+                      {item.excerpts.map((ex, idx) => (
+                        <li
+                          key={ex.id || idx}
+                          style={{
+                            borderLeft: '3px solid #0b57d0',
+                            backgroundColor: '#f8fafd',
+                            padding: '0.5rem 0.75rem',
+                            fontSize: '0.9rem',
+                            borderRadius: '0 4px 4px 0',
+                          }}
+                        >
+                          <div
                             style={{
-                              borderLeft: '3px solid #0b57d0',
-                              backgroundColor: '#f8fafd',
-                              padding: '0.5rem 0.75rem',
-                              fontSize: '0.9rem',
-                              borderRadius: '0 4px 4px 0',
+                              fontSize: '0.78rem',
+                              fontWeight: 600,
+                              color: '#555',
+                              marginBottom: '0.25rem',
                             }}
                           >
-                            <div
-                              style={{
-                                fontSize: '0.78rem',
-                                fontWeight: 600,
-                                color: '#555',
-                                marginBottom: '0.25rem',
-                              }}
-                            >
-                              {ex.chapter}
-                            </div>
-                            <div style={{ color: '#222', lineHeight: 1.45 }}>
-                              {renderHighlightedExcerpt(ex)}
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>
-                        No excerpts stored for this lexeme.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
+                            {ex.chapter}
+                          </div>
+                          <div style={{ color: '#222', lineHeight: 1.45 }}>
+                            {renderHighlightedExcerpt(ex)}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>
+                      No excerpts stored for this lexeme.
+                    </p>
+                  )}
+                </div>
+              )}
             </li>
           ))}
         </ul>
@@ -491,3 +657,405 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
   );
 }
 
+interface BookQuizViewProps {
+  apiClient: ApiClient;
+  bookId: number;
+  onNavigate: (path: string) => void;
+  shuffleQuizItems: (items: VocabularyEntry[]) => VocabularyEntry[];
+}
+
+function BookQuizView({
+  apiClient,
+  bookId,
+  onNavigate,
+  shuffleQuizItems,
+}: BookQuizViewProps) {
+  const [book, setBook] = useState<BookSummary | undefined>(undefined);
+  const [queue, setQueue] = useState<VocabularyEntry[]>([]);
+  const [quizSize, setQuizSize] = useState(0);
+  const [correctCount, setCorrectCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [phase, setPhase] = useState<'prompt' | 'reveal'>('prompt');
+  const [answerInput, setAnswerInput] = useState('');
+  const [submittedAnswer, setSubmittedAnswer] = useState('');
+  const [lastCorrect, setLastCorrect] = useState(false);
+  const [excerptOpen, setExcerptOpen] = useState(false);
+
+  const attemptedLexemeIdsRef = useRef<Set<number>>(new Set());
+  const answerInputRef = useRef<HTMLInputElement | null>(null);
+  const nextButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const startQuiz = apiClient.startBookQuiz ?? defaultApiClient.startBookQuiz!;
+    setLoading(true);
+    attemptedLexemeIdsRef.current = new Set();
+
+    startQuiz(bookId)
+      .then((session) => {
+        if (!cancelled) {
+          const shuffled = shuffleQuizItems(session.items ?? []);
+          setBook(session.book);
+          setQueue(shuffled);
+          setQuizSize(shuffled.length);
+          setCorrectCount(0);
+          setPhase('prompt');
+          setAnswerInput('');
+          setError(null);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to start quiz');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiClient, bookId, shuffleQuizItems]);
+
+  const currentItem = queue[0];
+
+  useEffect(() => {
+    if (!loading && currentItem && phase === 'prompt') {
+      answerInputRef.current?.focus();
+    }
+  }, [loading, currentItem, phase]);
+
+  useEffect(() => {
+    if (!loading && currentItem && phase === 'reveal') {
+      nextButtonRef.current?.focus();
+    }
+  }, [loading, currentItem, phase]);
+
+  const handleSubmitPrompt = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentItem || phase !== 'prompt') {
+      return;
+    }
+
+    const isCorrect = evaluateQuizAnswer(answerInput, currentItem);
+    const isFirstAttempt = !attemptedLexemeIdsRef.current.has(currentItem.id);
+
+    if (isFirstAttempt) {
+      attemptedLexemeIdsRef.current.add(currentItem.id);
+      const recordAttempt =
+        apiClient.recordLexemeAttempt ?? defaultApiClient.recordLexemeAttempt!;
+      void recordAttempt(currentItem.id, { first_attempt_correct: isCorrect });
+    }
+
+    if (isCorrect) {
+      setCorrectCount((c) => c + 1);
+    }
+
+    setSubmittedAnswer(answerInput);
+    setLastCorrect(isCorrect);
+    setExcerptOpen(false);
+    setPhase('reveal');
+  };
+
+  const handleAdvance = () => {
+    if (!currentItem || phase !== 'reveal') {
+      return;
+    }
+
+    if (lastCorrect) {
+      const remaining = queue.slice(1);
+      if (remaining.length === 0) {
+        onNavigate(`/books/${bookId}/vocabulary`);
+        return;
+      }
+      setQueue(remaining);
+    } else {
+      const reQueued = [...queue.slice(1), currentItem];
+      setQueue(reQueued);
+    }
+
+    setAnswerInput('');
+    setSubmittedAnswer('');
+    setExcerptOpen(false);
+    setPhase('prompt');
+  };
+
+  const isFinishing = phase === 'reveal' && lastCorrect && queue.length === 1;
+  const progressPercent = quizSize > 0 ? Math.round((correctCount / quizSize) * 100) : 0;
+
+  return (
+    <section>
+      <div style={{ marginBottom: '1rem' }}>
+        <a
+          href={`/books/${bookId}/vocabulary`}
+          onClick={(e) => {
+            e.preventDefault();
+            onNavigate(`/books/${bookId}/vocabulary`);
+          }}
+          style={{ color: '#0b57d0', textDecoration: 'none', fontSize: '0.9rem' }}
+        >
+          ← Back to Vocabulary
+        </a>
+      </div>
+
+      {book && (
+        <h2 style={{ margin: '0 0 1rem', fontSize: '1.35rem' }}>
+          Quiz: {book.title}
+        </h2>
+      )}
+
+      {loading && <p>Loading quiz...</p>}
+      {error && <p role="alert">Error: {error}</p>}
+
+      {!loading && !error && quizSize === 0 && (
+        <div>
+          <p>All lexemes in this book are already mastered or marked as known!</p>
+          <button
+            type="button"
+            onClick={() => onNavigate(`/books/${bookId}/vocabulary`)}
+            style={{ padding: '0.45rem 0.9rem', cursor: 'pointer' }}
+          >
+            Back to Vocabulary
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && quizSize > 0 && currentItem && (
+        <div>
+          <div style={{ marginBottom: '1.25rem' }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                fontSize: '0.9rem',
+                marginBottom: '0.35rem',
+                fontWeight: 600,
+              }}
+            >
+              <span>Progress</span>
+              <span>
+                {correctCount} / {quizSize}
+              </span>
+            </div>
+            <div
+              role="progressbar"
+              aria-valuenow={correctCount}
+              aria-valuemin={0}
+              aria-valuemax={quizSize}
+              style={{
+                width: '100%',
+                height: '10px',
+                backgroundColor: '#e5e9f0',
+                borderRadius: '999px',
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  width: `${progressPercent}%`,
+                  height: '100%',
+                  backgroundColor: '#0b57d0',
+                  transition: 'width 0.2s ease',
+                }}
+              />
+            </div>
+          </div>
+
+          <div
+            style={{
+              border: '1px solid #ddd',
+              borderRadius: '8px',
+              padding: '1.5rem',
+              backgroundColor: '#fff',
+            }}
+          >
+            <div style={{ marginBottom: '1rem' }}>
+              <span
+                style={{
+                  fontSize: '0.8rem',
+                  padding: '0.15rem 0.5rem',
+                  borderRadius: '4px',
+                  backgroundColor: '#f0f4f9',
+                  color: '#333',
+                  marginRight: '0.6rem',
+                }}
+              >
+                {currentItem.pos}
+              </span>
+              <strong style={{ fontSize: '1.5rem' }}>{currentItem.prompt_form}</strong>
+            </div>
+
+            {phase === 'prompt' && (
+              <form onSubmit={handleSubmitPrompt}>
+                <label
+                  htmlFor="quiz-answer-input"
+                  style={{ display: 'block', fontSize: '0.9rem', marginBottom: '0.4rem', color: '#444' }}
+                >
+                  Your Answer (Lithuanian translation or English short definition — press Enter to submit or skip):
+                </label>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <input
+                    id="quiz-answer-input"
+                    ref={answerInputRef}
+                    type="text"
+                    aria-label="Your Answer"
+                    value={answerInput}
+                    onChange={(e) => setAnswerInput(e.target.value)}
+                    placeholder="Type translation or short definition..."
+                    autoComplete="off"
+                    style={{
+                      flex: 1,
+                      padding: '0.6rem 0.75rem',
+                      fontSize: '1rem',
+                      borderRadius: '6px',
+                      border: '1px solid #bbb',
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    style={{
+                      padding: '0.6rem 1.1rem',
+                      fontSize: '1rem',
+                      borderRadius: '6px',
+                      border: 'none',
+                      backgroundColor: '#0b57d0',
+                      color: '#fff',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Submit
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {phase === 'reveal' && (
+              <div>
+                <div
+                  style={{
+                    padding: '0.6rem 0.85rem',
+                    borderRadius: '6px',
+                    marginBottom: '1rem',
+                    backgroundColor: lastCorrect ? '#e8f5e9' : '#fdecea',
+                    color: lastCorrect ? '#1b5e20' : '#b71c1c',
+                    fontWeight: 700,
+                    fontSize: '1.05rem',
+                  }}
+                >
+                  {lastCorrect ? 'Correct' : 'Incorrect'}
+                </div>
+
+                <div style={{ fontSize: '0.92rem', marginBottom: '0.5rem' }}>
+                  <strong>Your Answer: </strong>
+                  <span>
+                    {submittedAnswer.trim() ? submittedAnswer : <em>Skipped (I don&apos;t know)</em>}
+                  </span>
+                </div>
+
+                <div style={{ fontSize: '0.92rem', marginBottom: '0.35rem' }}>
+                  <strong>Lithuanian Translations: </strong>
+                  {currentItem.translations_lt.length > 0 ? (
+                    <span>{currentItem.translations_lt.join(', ')}</span>
+                  ) : (
+                    <em style={{ color: '#777' }}>No Lithuanian translation available</em>
+                  )}
+                </div>
+
+                <div style={{ fontSize: '0.92rem', marginBottom: '0.5rem' }}>
+                  <strong>Short Definitions: </strong>
+                  <span>{currentItem.short_definitions.join(', ')}</span>
+                </div>
+
+                <div
+                  style={{
+                    fontSize: '0.92rem',
+                    color: '#222',
+                    whiteSpace: 'pre-line',
+                    backgroundColor: '#fafafa',
+                    padding: '0.6rem 0.75rem',
+                    borderRadius: '6px',
+                    marginBottom: '0.75rem',
+                  }}
+                >
+                  {currentItem.full_definition}
+                </div>
+
+                {currentItem.excerpts && currentItem.excerpts.length > 0 && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <button
+                      type="button"
+                      aria-expanded={excerptOpen}
+                      onClick={() => setExcerptOpen((o) => !o)}
+                      style={{
+                        background: 'none',
+                        border: '1px solid #ccd4e0',
+                        borderRadius: '4px',
+                        padding: '0.25rem 0.6rem',
+                        fontSize: '0.85rem',
+                        color: '#0b57d0',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {excerptOpen ? 'Hide book excerpt' : 'Show book excerpt'}
+                    </button>
+                    {excerptOpen && (
+                      <div
+                        style={{
+                          marginTop: '0.5rem',
+                          borderLeft: '3px solid #0b57d0',
+                          backgroundColor: '#f8fafd',
+                          padding: '0.5rem 0.75rem',
+                          fontSize: '0.9rem',
+                          borderRadius: '0 4px 4px 0',
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                            color: '#555',
+                            marginBottom: '0.25rem',
+                          }}
+                        >
+                          {currentItem.excerpts[0]!.chapter}
+                        </div>
+                        <div style={{ color: '#222', lineHeight: 1.45 }}>
+                          {renderHighlightedExcerpt(currentItem.excerpts[0]!)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div>
+                  <button
+                    ref={nextButtonRef}
+                    type="button"
+                    onClick={handleAdvance}
+                    style={{
+                      padding: '0.6rem 1.25rem',
+                      fontSize: '1rem',
+                      borderRadius: '6px',
+                      border: 'none',
+                      backgroundColor: '#0b57d0',
+                      color: '#fff',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {isFinishing ? 'Finish' : 'Next'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
