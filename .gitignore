@@ -1,0 +1,14 @@
+# Binaries
+/ebook-vocab
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Frontend dependencies & build artifacts
+web/node_modules/
+web/dist/
+node_modules/
+dist/
+*.tsbuildinfo
