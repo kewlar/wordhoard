@@ -77,4 +77,47 @@ func TestCLIIngestSubcommand(t *testing.T) {
 	if !strings.Contains(out.String(), "Call for the Dead") {
 		t.Errorf("expected output to mention book title, got:\n%s", out.String())
 	}
+	if !strings.Contains(out.String(), "Wordhoard Ingester") {
+		t.Errorf("expected output to mention Wordhoard Ingester, got:\n%s", out.String())
+	}
+}
+
+func TestCLIWordhoardUsageAndDefaultDB(t *testing.T) {
+	var out bytes.Buffer
+	err := runCLI(nil, &out)
+	if err == nil || !strings.Contains(err.Error(), "usage: wordhoard") {
+		t.Fatalf("expected top-level usage error to mention wordhoard, got: %v", err)
+	}
+
+	err = runCLI([]string{"ingest"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "usage: wordhoard ingest") {
+		t.Fatalf("expected ingest usage error to mention wordhoard ingest, got: %v", err)
+	}
+
+	out.Reset()
+	_ = runCLI([]string{"serve", "-h"}, &out)
+	if !strings.Contains(out.String(), "wordhoard.db") {
+		t.Errorf("expected serve help output to default to wordhoard.db, got:\n%s", out.String())
+	}
+
+	tempDir := t.TempDir()
+	epubPath := createSampleEPUB(t, tempDir, "call.epub", "Call for the Dead", "John le Carré")
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(origDir)
+	})
+
+	out.Reset()
+	if err := runCLI([]string{"ingest", epubPath}, &out); err != nil {
+		t.Fatalf("runCLI ingest with default db failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "wordhoard.db")); err != nil {
+		t.Errorf("expected default database file wordhoard.db to be created, stat err: %v", err)
+	}
 }

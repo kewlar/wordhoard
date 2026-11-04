@@ -1,4 +1,4 @@
-module ebook-vocab
+module wordhoard
 
 go 1.27
 

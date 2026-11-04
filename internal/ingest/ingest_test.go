@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"ebook-vocab/internal/db"
-	"ebook-vocab/internal/dictionary"
-	"ebook-vocab/internal/ingest"
+	"wordhoard/internal/db"
+	"wordhoard/internal/dictionary"
+	"wordhoard/internal/ingest"
 )
 
 func createTestEPUB(t *testing.T, dir, filename, title, author, body string) string {

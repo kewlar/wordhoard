@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ebook-vocab/internal/db"
+	"wordhoard/internal/db"
 )
 
 func TestOpenConfiguresWALAndBusyTimeout(t *testing.T) {
@@ -269,5 +269,169 @@ func TestDynamicObscurityScoreAndVocabularyFiltering(t *testing.T) {
 		t.Errorf("unexpected page 2 result: %+v", paged)
 	}
 }
+
+func TestLexemeSourcesResolutionAndPreservation(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open failed: %v", err)
+	}
+	defer store.Close()
+
+	book, _, err := store.CreateBook(db.BookInput{
+		Title:    "Source Layered Book",
+		Author:   "Author S",
+		Filename: "/books/sources.epub",
+		FileSize: 4096,
+		SHA256:   "sha-sources",
+	})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+
+	err = store.SaveBookLexemes(book.ID, []db.LexemeInput{
+		{
+			Lemma:            "laconic",
+			POS:              "adjective",
+			PromptForm:       "laconic (adj.)",
+			CEFRLevel:        "c1",
+			GlobalZipfFreq:   2.1,
+			FullDefinition:   "1. Brief and to the point",
+			ShortDefinitions: []string{"concise", "terse"},
+			TranslationsLT:   []string{"lakoniškas"},
+			OccurrenceCount:  3,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveBookLexemes: %v", err)
+	}
+
+	// 1. After ingest (SaveBookLexemes), 'offline' source is populated and resolved
+	page, err := store.ListBookVocabulary(book.ID, db.VocabularyFilter{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("ListBookVocabulary: %v", err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(page.Items))
+	}
+	lexemeID := page.Items[0].ID
+
+	sources, err := store.GetLexemeSources(lexemeID)
+	if err != nil {
+		t.Fatalf("GetLexemeSources: %v", err)
+	}
+	offlineSrc, ok := sources[db.SourceOffline]
+	if !ok {
+		t.Fatalf("expected 'offline' source row to exist after SaveBookLexemes")
+	}
+	if offlineSrc.FullDefinition != "1. Brief and to the point" ||
+		len(offlineSrc.ShortDefinitions) != 2 || offlineSrc.ShortDefinitions[0] != "concise" ||
+		len(offlineSrc.TranslationsLT) != 1 || offlineSrc.TranslationsLT[0] != "lakoniškas" {
+		t.Errorf("unexpected offline source: %+v", offlineSrc)
+	}
+
+	// 2. Add 'online' source -> resolved lexeme combines offline + online (deduplicated union preserving order)
+	err = store.UpsertLexemeSource(lexemeID, db.SourceOnline, db.SourceContent{
+		FullDefinition:   "Online definition fallback",
+		ShortDefinitions: []string{"terse", "pithy"},
+		TranslationsLT:   []string{"lakoniškas", "glaustas", "trumpas"},
+	})
+	if err != nil {
+		t.Fatalf("UpsertLexemeSource online: %v", err)
+	}
+
+	page, err = store.ListBookVocabulary(book.ID, db.VocabularyFilter{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("ListBookVocabulary after online source: %v", err)
+	}
+	resolved := page.Items[0]
+	if resolved.FullDefinition != "1. Brief and to the point" {
+		t.Errorf("expected offline full_definition to take precedence when non-empty, got %q", resolved.FullDefinition)
+	}
+	wantShort := []string{"concise", "terse", "pithy"}
+	if len(resolved.ShortDefinitions) != len(wantShort) {
+		t.Fatalf("expected ShortDefinitions %v, got %v", wantShort, resolved.ShortDefinitions)
+	}
+	for i, w := range wantShort {
+		if resolved.ShortDefinitions[i] != w {
+			t.Errorf("ShortDefinitions[%d] = %q, want %q", i, resolved.ShortDefinitions[i], w)
+		}
+	}
+	wantLT := []string{"lakoniškas", "glaustas", "trumpas"}
+	if len(resolved.TranslationsLT) != len(wantLT) {
+		t.Fatalf("expected TranslationsLT %v, got %v", wantLT, resolved.TranslationsLT)
+	}
+	for i, w := range wantLT {
+		if resolved.TranslationsLT[i] != w {
+			t.Errorf("TranslationsLT[%d] = %q, want %q", i, resolved.TranslationsLT[i], w)
+		}
+	}
+
+	// Quiz candidates must also resolve combined offline + online values
+	quiz, err := store.SelectQuizCandidates(book.ID, 10)
+	if err != nil {
+		t.Fatalf("SelectQuizCandidates: %v", err)
+	}
+	if len(quiz.Items) != 1 || len(quiz.Items[0].TranslationsLT) != 3 || quiz.Items[0].TranslationsLT[1] != "glaustas" {
+		t.Errorf("expected quiz candidate to have resolved online translations, got %+v", quiz.Items)
+	}
+
+	// 3. Patching lexeme with user edits writes to source = 'user', overrides resolved values, and leaves 'offline' & 'online' untouched
+	userDef := "1. Custom user definition"
+	userShort := []string{"brief", "succinct"}
+	userLT := []string{"glaustas"}
+	updatedEntry, err := store.PatchLexeme(lexemeID, db.LexemePatch{
+		FullDefinition:   &userDef,
+		ShortDefinitions: &userShort,
+		TranslationsLT:   &userLT,
+	})
+	if err != nil {
+		t.Fatalf("PatchLexeme: %v", err)
+	}
+	if updatedEntry.FullDefinition != userDef ||
+		len(updatedEntry.ShortDefinitions) != 2 || updatedEntry.ShortDefinitions[0] != "brief" ||
+		len(updatedEntry.TranslationsLT) != 1 || updatedEntry.TranslationsLT[0] != "glaustas" {
+		t.Errorf("unexpected updatedEntry from PatchLexeme: %+v", updatedEntry)
+	}
+
+	// Verify ListBookVocabulary and SelectQuizCandidates now return 'user' values
+	page, err = store.ListBookVocabulary(book.ID, db.VocabularyFilter{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("ListBookVocabulary after user edit: %v", err)
+	}
+	if page.Items[0].FullDefinition != userDef || len(page.Items[0].TranslationsLT) != 1 || page.Items[0].TranslationsLT[0] != "glaustas" {
+		t.Errorf("expected ListBookVocabulary to return user source values, got %+v", page.Items[0])
+	}
+
+	quiz, err = store.SelectQuizCandidates(book.ID, 10)
+	if err != nil {
+		t.Fatalf("SelectQuizCandidates after user edit: %v", err)
+	}
+	if quiz.Items[0].FullDefinition != userDef || len(quiz.Items[0].ShortDefinitions) != 2 || quiz.Items[0].ShortDefinitions[0] != "brief" {
+		t.Errorf("expected SelectQuizCandidates to return user source values, got %+v", quiz.Items[0])
+	}
+
+	// Verify underlying 'offline' and 'online' rows in lexeme_sources are completely untouched
+	sourcesAfter, err := store.GetLexemeSources(lexemeID)
+	if err != nil {
+		t.Fatalf("GetLexemeSources after user edit: %v", err)
+	}
+	if len(sourcesAfter) != 3 {
+		t.Fatalf("expected 3 sources (offline, online, user), got %d", len(sourcesAfter))
+	}
+	if sourcesAfter[db.SourceOffline].FullDefinition != "1. Brief and to the point" ||
+		len(sourcesAfter[db.SourceOffline].TranslationsLT) != 1 || sourcesAfter[db.SourceOffline].TranslationsLT[0] != "lakoniškas" {
+		t.Errorf("offline source was modified: %+v", sourcesAfter[db.SourceOffline])
+	}
+	if sourcesAfter[db.SourceOnline].FullDefinition != "Online definition fallback" ||
+		len(sourcesAfter[db.SourceOnline].TranslationsLT) != 3 || sourcesAfter[db.SourceOnline].TranslationsLT[1] != "glaustas" {
+		t.Errorf("online source was modified: %+v", sourcesAfter[db.SourceOnline])
+	}
+	if sourcesAfter[db.SourceUser].FullDefinition != userDef ||
+		len(sourcesAfter[db.SourceUser].ShortDefinitions) != 2 || sourcesAfter[db.SourceUser].ShortDefinitions[0] != "brief" {
+		t.Errorf("unexpected user source: %+v", sourcesAfter[db.SourceUser])
+	}
+}
+
 
 

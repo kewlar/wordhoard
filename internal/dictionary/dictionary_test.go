@@ -3,7 +3,7 @@ package dictionary_test
 import (
 	"testing"
 
-	"ebook-vocab/internal/dictionary"
+	"wordhoard/internal/dictionary"
 )
 
 func TestFormatPromptForm(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,10 +13,11 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"ebook-vocab/internal/db"
-	"ebook-vocab/internal/dictionary"
-	"ebook-vocab/internal/ingest"
-	"ebook-vocab/internal/server"
+	"wordhoard/internal/db"
+	"wordhoard/internal/dictionary"
+	"wordhoard/internal/ingest"
+	"wordhoard/internal/server"
+	"wordhoard/internal/translate"
 )
 
 func createTestEPUB(t *testing.T, dir, filename, title, author string) string {
@@ -86,7 +88,7 @@ func TestGetBooksAndServeSPA(t *testing.T) {
 	}
 
 	spaFS := fstest.MapFS{
-		"index.html":        {Data: []byte("<!doctype html><html><body><div id=\"root\">Ebook Vocab SPA</div></body></html>")},
+		"index.html":        {Data: []byte("<!doctype html><html><body><div id=\"root\">Wordhoard SPA</div></body></html>")},
 		"assets/app.js":     {Data: []byte("console.log('app');")},
 	}
 
@@ -647,6 +649,76 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		}
 	}
 
+	// Set conundrum to learning (mastery_level = 2) so Book 1 has:
+	// - laconic: mastered (mastery_level = 5, known = false)
+	// - conundrum: learning (mastery_level = 2, known = false)
+	// - ephemeral: known (mastery_level = 0, known = true)
+	for i := 0; i < 2; i++ {
+		resp, err := http.Post(
+			fmt.Sprintf("%s/api/lexemes/%d/attempt", ts.URL, conundrumID),
+			"application/json",
+			strings.NewReader(`{"first_attempt_correct":true}`),
+		)
+		if err != nil {
+			t.Fatalf("POST attempt true for conundrum: %v", err)
+		}
+		resp.Body.Close()
+	}
+
+	assertVocabLemmas := func(query string, wantLemmas []string) {
+		t.Helper()
+		u := ts.URL + "/api/books/1/vocabulary"
+		if query != "" {
+			u += "?" + query
+		}
+		r, err := http.Get(u)
+		if err != nil {
+			t.Fatalf("GET %s: %v", u, err)
+		}
+		defer r.Body.Close()
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: expected 200, got %d", u, r.StatusCode)
+		}
+		var p db.VocabularyPage
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			t.Fatalf("decode %s: %v", u, err)
+		}
+		if p.Total != len(wantLemmas) || len(p.Items) != len(wantLemmas) {
+			t.Fatalf("GET %s: expected %d items %v, got total=%d items=%+v", u, len(wantLemmas), wantLemmas, p.Total, p.Items)
+		}
+		for i, want := range wantLemmas {
+			if p.Items[i].Lemma != want {
+				t.Errorf("GET %s: item[%d].Lemma = %q, want %q", u, i, p.Items[i].Lemma, want)
+			}
+		}
+	}
+
+	// Default (omitted statuses) -> unseen,learning,mastered -> [laconic (mastered), conundrum (learning)]
+	assertVocabLemmas("", []string{"laconic", "conundrum"})
+	// Explicit empty statuses= -> 0 items
+	assertVocabLemmas("statuses=", []string{})
+	// Individual status filters
+	assertVocabLemmas("statuses=unseen", []string{})
+	assertVocabLemmas("statuses=learning", []string{"conundrum"})
+	assertVocabLemmas("statuses=mastered", []string{"laconic"})
+	assertVocabLemmas("statuses=known", []string{"ephemeral"})
+	// Combined status filters
+	assertVocabLemmas("statuses=learning,known", []string{"conundrum", "ephemeral"})
+	assertVocabLemmas("statuses=unseen,learning,mastered,known", []string{"laconic", "conundrum", "ephemeral"})
+
+	// Reset conundrum back to unseen (mastery_level = 0) and verify statuses=unseen returns conundrum
+	resetConundrumResp, err := http.Post(
+		fmt.Sprintf("%s/api/lexemes/%d/attempt", ts.URL, conundrumID),
+		"application/json",
+		strings.NewReader(`{"first_attempt_correct":false}`),
+	)
+	if err != nil {
+		t.Fatalf("POST reset conundrum: %v", err)
+	}
+	resetConundrumResp.Body.Close()
+	assertVocabLemmas("statuses=unseen", []string{"conundrum"})
+	assertVocabLemmas("statuses=unseen,mastered", []string{"laconic", "conundrum"})
+
 	// Now laconic is mastered (5) globally: Book 2 has only 'laconic' (mastered=5) and 'ephemeral' (known=true),
 	// so POST /api/books/2/quiz returns 0 unmastered items, and Book 2 has mastered_count=1, known_count=1!
 	book2QuizResp, err := http.Post(ts.URL+"/api/books/2/quiz", "application/json", nil)
@@ -687,5 +759,267 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		t.Errorf("expected 404 for unknown lexeme attempt, got %d", unknownAttemptResp.StatusCode)
 	}
 }
+
+func TestPatchLexemeSavesUserSourceAndPreservesOfflineOnlineSources(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer store.Close()
+
+	book, _, err := store.CreateBook(db.BookInput{
+		Title:    "Editable Lexemes Book",
+		Author:   "Author E",
+		Filename: "/books/editable.epub",
+		FileSize: 2048,
+		SHA256:   "sha-editable",
+	})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+
+	err = store.SaveBookLexemes(book.ID, []db.LexemeInput{
+		{
+			Lemma:            "laconic",
+			POS:              "adjective",
+			PromptForm:       "laconic (adj.)",
+			CEFRLevel:        "c1",
+			GlobalZipfFreq:   2.2,
+			FullDefinition:   "1. Brief and to the point",
+			ShortDefinitions: []string{"concise", "terse"},
+			TranslationsLT:   []string{"lakoniškas"},
+			OccurrenceCount:  2,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveBookLexemes: %v", err)
+	}
+
+	page, err := store.ListBookVocabulary(book.ID, db.VocabularyFilter{Page: 1, PageSize: 10})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("ListBookVocabulary: err=%v len=%d", err, len(page.Items))
+	}
+	lexemeID := page.Items[0].ID
+
+	// Seed an online source row as well
+	if err := store.UpsertLexemeSource(lexemeID, db.SourceOnline, db.SourceContent{ShortDefinitions: []string{"pithy"}, TranslationsLT: []string{"glaustas"}}); err != nil {
+		t.Fatalf("UpsertLexemeSource online: %v", err)
+	}
+
+	handler := server.NewHandler(store, nil)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	// Before user edit, GET /api/books/1/vocabulary resolves combined offline + online
+	vocabResp1, err := http.Get(fmt.Sprintf("%s/api/books/%d/vocabulary", ts.URL, book.ID))
+	if err != nil {
+		t.Fatalf("GET vocabulary before edit: %v", err)
+	}
+	var vocabBefore db.VocabularyPage
+	if err := json.NewDecoder(vocabResp1.Body).Decode(&vocabBefore); err != nil {
+		vocabResp1.Body.Close()
+		t.Fatalf("decode vocabBefore: %v", err)
+	}
+	vocabResp1.Body.Close()
+
+	if len(vocabBefore.Items[0].TranslationsLT) != 2 || vocabBefore.Items[0].TranslationsLT[0] != "lakoniškas" || vocabBefore.Items[0].TranslationsLT[1] != "glaustas" {
+		t.Fatalf("expected combined offline+online translations [lakoniškas, glaustas], got %v", vocabBefore.Items[0].TranslationsLT)
+	}
+
+	// PATCH /api/lexemes/:id with user-edited fields
+	patchBody := `{
+		"full_definition": "1. User-customized definition of laconic",
+		"short_definitions": ["succinct", "brief"],
+		"translations_lt": ["trumpas", "glaustas"]
+	}`
+	req, err := http.NewRequest(http.MethodPatch, fmt.Sprintf("%s/api/lexemes/%d", ts.URL, lexemeID), strings.NewReader(patchBody))
+	if err != nil {
+		t.Fatalf("NewRequest PATCH: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	patchResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/lexemes/%d: %v", lexemeID, err)
+	}
+	defer patchResp.Body.Close()
+	if patchResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK on PATCH, got %d", patchResp.StatusCode)
+	}
+
+	var updated db.LexemeEntry
+	if err := json.NewDecoder(patchResp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode PATCH response: %v", err)
+	}
+	if updated.ID != lexemeID || updated.Lemma != "laconic" ||
+		updated.FullDefinition != "1. User-customized definition of laconic" ||
+		len(updated.ShortDefinitions) != 2 || updated.ShortDefinitions[0] != "succinct" ||
+		len(updated.TranslationsLT) != 2 || updated.TranslationsLT[0] != "trumpas" {
+		t.Errorf("unexpected updated LexemeEntry from PATCH: %+v", updated)
+	}
+
+	// Verify GET /api/books/1/vocabulary now returns user values
+	vocabResp2, err := http.Get(fmt.Sprintf("%s/api/books/%d/vocabulary", ts.URL, book.ID))
+	if err != nil {
+		t.Fatalf("GET vocabulary after edit: %v", err)
+	}
+	var vocabAfter db.VocabularyPage
+	if err := json.NewDecoder(vocabResp2.Body).Decode(&vocabAfter); err != nil {
+		vocabResp2.Body.Close()
+		t.Fatalf("decode vocabAfter: %v", err)
+	}
+	vocabResp2.Body.Close()
+
+	if vocabAfter.Items[0].FullDefinition != "1. User-customized definition of laconic" ||
+		len(vocabAfter.Items[0].TranslationsLT) != 2 || vocabAfter.Items[0].TranslationsLT[0] != "trumpas" {
+		t.Errorf("expected vocabulary endpoint to return user source values, got %+v", vocabAfter.Items[0])
+	}
+
+	// Verify offline and online rows are preserved untouched
+	sources, err := store.GetLexemeSources(lexemeID)
+	if err != nil {
+		t.Fatalf("GetLexemeSources: %v", err)
+	}
+	if sources[db.SourceOffline].FullDefinition != "1. Brief and to the point" ||
+		len(sources[db.SourceOffline].TranslationsLT) != 1 || sources[db.SourceOffline].TranslationsLT[0] != "lakoniškas" {
+		t.Errorf("expected offline source untouched, got %+v", sources[db.SourceOffline])
+	}
+	if len(sources[db.SourceOnline].TranslationsLT) != 1 || sources[db.SourceOnline].TranslationsLT[0] != "glaustas" {
+		t.Errorf("expected online source untouched, got %+v", sources[db.SourceOnline])
+	}
+}
+
+func TestTranslateLexemeEndpoint(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer store.Close()
+
+	book, _, err := store.CreateBook(db.BookInput{
+		Title:    "Translate Endpoint Book",
+		Author:   "Author T",
+		Filename: "/books/translate.epub",
+		FileSize: 4096,
+		SHA256:   "sha-translate",
+	})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+
+	err = store.SaveBookLexemes(book.ID, []db.LexemeInput{
+		{
+			Lemma:            "laconic",
+			POS:              "adjective",
+			PromptForm:       "laconic (adj.)",
+			CEFRLevel:        "c1",
+			GlobalZipfFreq:   2.2,
+			FullDefinition:   "1. Brief and to the point",
+			ShortDefinitions: []string{"concise", "terse"},
+			TranslationsLT:   []string{"lakoniškas"},
+			OccurrenceCount:  2,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveBookLexemes: %v", err)
+	}
+
+	page, err := store.ListBookVocabulary(book.ID, db.VocabularyFilter{Page: 1, PageSize: 10})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("ListBookVocabulary: err=%v len=%d", err, len(page.Items))
+	}
+	lexemeID := page.Items[0].ID
+
+	var geminiReqBody string
+	geminiStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		geminiReqBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, fmt.Sprintf(`{
+			"candidates": [{
+				"content": {
+					"parts": [{
+						"text": "{\"items\":[{\"id\":%d,\"translations_lt\":[\"glaustas\",\"trumpas\"]}]}"
+					}]
+				}
+			}]
+		}`, lexemeID))
+	}))
+	defer geminiStub.Close()
+
+	tr, err := translate.New(translate.Config{
+		Provider:      "gemini",
+		GeminiAPIKey:  "stub-key",
+		GeminiModel:   "gemini-3.5-flash-lite",
+		GeminiBaseURL: geminiStub.URL,
+		HTTPClient:    geminiStub.Client(),
+	})
+	if err != nil {
+		t.Fatalf("translate.New: %v", err)
+	}
+
+	handler := server.NewHandler(store, nil, server.WithTranslator(tr))
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp, err := http.Post(fmt.Sprintf("%s/api/lexemes/%d/translate", ts.URL, lexemeID), "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /api/lexemes/%d/translate: %v", lexemeID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 OK, got %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result struct {
+		FetchedTranslationsLT []string       `json:"fetched_translations_lt"`
+		Lexeme                db.LexemeEntry `json:"lexeme"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if len(result.FetchedTranslationsLT) != 2 || result.FetchedTranslationsLT[0] != "glaustas" || result.FetchedTranslationsLT[1] != "trumpas" {
+		t.Errorf("expected fetched_translations_lt [glaustas, trumpas], got %v", result.FetchedTranslationsLT)
+	}
+	if len(result.Lexeme.TranslationsLT) != 3 ||
+		result.Lexeme.TranslationsLT[0] != "lakoniškas" ||
+		result.Lexeme.TranslationsLT[1] != "glaustas" ||
+		result.Lexeme.TranslationsLT[2] != "trumpas" {
+		t.Errorf("expected resolved lexeme.translations_lt [lakoniškas, glaustas, trumpas], got %v", result.Lexeme.TranslationsLT)
+	}
+	if !strings.Contains(geminiReqBody, "laconic (adj.)") || !strings.Contains(geminiReqBody, "Brief and to the point") {
+		t.Errorf("expected translator request to include prompt_form and full_definition, got %s", geminiReqBody)
+	}
+
+	// Verify lexeme_sources rows in database
+	sources, err := store.GetLexemeSources(lexemeID)
+	if err != nil {
+		t.Fatalf("GetLexemeSources: %v", err)
+	}
+	if len(sources[db.SourceOnline].TranslationsLT) != 2 || sources[db.SourceOnline].TranslationsLT[0] != "glaustas" || sources[db.SourceOnline].TranslationsLT[1] != "trumpas" {
+		t.Errorf("expected online source to have [glaustas, trumpas], got %+v", sources[db.SourceOnline])
+	}
+	if len(sources[db.SourceOffline].TranslationsLT) != 1 || sources[db.SourceOffline].TranslationsLT[0] != "lakoniškas" {
+		t.Errorf("expected offline source untouched [lakoniškas], got %+v", sources[db.SourceOffline])
+	}
+
+	// Verify 404 on unknown lexeme ID
+	notFoundResp, err := http.Post(fmt.Sprintf("%s/api/lexemes/99999/translate", ts.URL), "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /api/lexemes/99999/translate: %v", err)
+	}
+	notFoundResp.Body.Close()
+	if notFoundResp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 for unknown lexeme translate, got %d", notFoundResp.StatusCode)
+	}
+}
+
+
 
 

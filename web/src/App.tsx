@@ -5,6 +5,7 @@ import {
   type BookSummary,
   type Excerpt,
   type LexemeEntry,
+  type LexemeStatusKey,
   type VocabularyPage,
   type VocabularyQuery,
 } from './api';
@@ -116,7 +117,7 @@ export function App({
             }}
             style={{ color: 'inherit', textDecoration: 'none' }}
           >
-            Ebook Vocabulary
+            Wordhoard
           </a>
         </h1>
         <p style={{ margin: '0.5rem 0 0', color: '#555' }}>
@@ -192,7 +193,7 @@ function BooksListView({ apiClient, onNavigate }: BooksListViewProps) {
       {error && <p role="alert">Error: {error}</p>}
 
       {!loading && !error && books.length === 0 && (
-        <p>No books imported yet. Run <code>ebook-vocab ingest &lt;pattern&gt;</code> in your terminal.</p>
+        <p>No books imported yet. Run <code>wordhoard ingest &lt;pattern&gt;</code> in your terminal.</p>
       )}
 
       {!loading && !error && books.length > 0 && (
@@ -313,6 +314,239 @@ function renderHighlightedExcerpt(ex: Excerpt) {
   return <>{text}</>;
 }
 
+const LEXEME_STATUS_PILLS: Array<{ key: LexemeStatusKey; label: string }> = [
+  { key: 'unseen', label: 'Unseen' },
+  { key: 'learning', label: 'Learning' },
+  { key: 'mastered', label: 'Mastered' },
+  { key: 'known', label: 'Known' },
+];
+
+function parseCommaSeparatedList(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+interface LexemeEditFormProps {
+  item: Pick<LexemeEntry, 'id' | 'translations_lt' | 'short_definitions' | 'full_definition'>;
+  apiClient?: ApiClient;
+  onSave: (fields: {
+    translations_lt: string[];
+    short_definitions: string[];
+    full_definition: string;
+  }) => Promise<void> | void;
+  onCancel: () => void;
+}
+
+function LexemeEditForm({ item, apiClient, onSave, onCancel }: LexemeEditFormProps) {
+  const [translationsInput, setTranslationsInput] = useState(
+    (item.translations_lt ?? []).join(', ')
+  );
+  const [shortDefsInput, setShortDefsInput] = useState(
+    (item.short_definitions ?? []).join(', ')
+  );
+  const [fullDefInput, setFullDefInput] = useState(item.full_definition ?? '');
+  const [saving, setSaving] = useState(false);
+  const [fetchingTranslations, setFetchingTranslations] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  const handleFetchTranslations = async () => {
+    const translateFn = apiClient?.translateLexeme ?? defaultApiClient.translateLexeme!;
+    setFetchingTranslations(true);
+    setFetchError(null);
+    try {
+      const res = await translateFn(item.id);
+      const fetched = res.fetched_translations_lt ?? [];
+      setTranslationsInput((current) => {
+        const existing = parseCommaSeparatedList(current);
+        const seen = new Set(existing.map((s) => s.toLowerCase()));
+        const merged = [...existing];
+        for (const t of fetched) {
+          const trimmed = t.trim();
+          if (!trimmed) {
+            continue;
+          }
+          const lower = trimmed.toLowerCase();
+          if (!seen.has(lower)) {
+            seen.add(lower);
+            merged.push(trimmed);
+          }
+        }
+        return merged.join(', ');
+      });
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : 'Failed to fetch translations');
+    } finally {
+      setFetchingTranslations(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await onSave({
+        translations_lt: parseCommaSeparatedList(translationsInput),
+        short_definitions: parseCommaSeparatedList(shortDefsInput),
+        full_definition: fullDefInput.trim(),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={(e) => void handleSubmit(e)}
+      style={{
+        marginTop: '0.75rem',
+        padding: '0.85rem',
+        borderRadius: '6px',
+        border: '1px solid #ccd4e0',
+        backgroundColor: '#f8fafd',
+        display: 'grid',
+        gap: '0.65rem',
+      }}
+    >
+      <div style={{ display: 'grid', gap: '0.25rem' }}>
+        <label style={{ display: 'grid', gap: '0.25rem', fontSize: '0.88rem', fontWeight: 600 }}>
+          <span>Lithuanian Translations (comma-separated)</span>
+          <input
+            type="text"
+            value={translationsInput}
+            onChange={(e) => setTranslationsInput(e.target.value)}
+            style={{
+              padding: '0.45rem 0.6rem',
+              borderRadius: '4px',
+              border: '1px solid #bbb',
+              fontSize: '0.92rem',
+              fontWeight: 400,
+            }}
+          />
+        </label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem' }}>
+          <button
+            type="button"
+            disabled={fetchingTranslations}
+            onClick={() => void handleFetchTranslations()}
+            style={{
+              padding: '0.3rem 0.7rem',
+              borderRadius: '4px',
+              border: '1px solid #0b57d0',
+              backgroundColor: '#eef4ff',
+              color: '#0b57d0',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              cursor: fetchingTranslations ? 'wait' : 'pointer',
+            }}
+          >
+            Fetch translations
+          </button>
+          {fetchingTranslations && (
+            <span
+              role="status"
+              aria-live="polite"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                fontSize: '0.82rem',
+                color: '#0b57d0',
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  display: 'inline-block',
+                  width: '12px',
+                  height: '12px',
+                  border: '2px solid #b8d0fa',
+                  borderTopColor: '#0b57d0',
+                  borderRadius: '50%',
+                }}
+              />
+              Fetching translations...
+            </span>
+          )}
+          {fetchError && (
+            <span role="alert" style={{ fontSize: '0.82rem', color: '#b3261e' }}>
+              {fetchError}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <label style={{ display: 'grid', gap: '0.25rem', fontSize: '0.88rem', fontWeight: 600 }}>
+        <span>Short Definitions (comma-separated)</span>
+        <input
+          type="text"
+          value={shortDefsInput}
+          onChange={(e) => setShortDefsInput(e.target.value)}
+          style={{
+            padding: '0.45rem 0.6rem',
+            borderRadius: '4px',
+            border: '1px solid #bbb',
+            fontSize: '0.92rem',
+            fontWeight: 400,
+          }}
+        />
+      </label>
+
+      <label style={{ display: 'grid', gap: '0.25rem', fontSize: '0.88rem', fontWeight: 600 }}>
+        <span>Full Definition</span>
+        <textarea
+          rows={3}
+          value={fullDefInput}
+          onChange={(e) => setFullDefInput(e.target.value)}
+          style={{
+            padding: '0.45rem 0.6rem',
+            borderRadius: '4px',
+            border: '1px solid #bbb',
+            fontSize: '0.92rem',
+            fontWeight: 400,
+            fontFamily: 'inherit',
+          }}
+        />
+      </label>
+
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+        <button
+          type="submit"
+          disabled={saving}
+          style={{
+            padding: '0.35rem 0.85rem',
+            borderRadius: '4px',
+            border: 'none',
+            backgroundColor: '#0b57d0',
+            color: '#fff',
+            fontSize: '0.85rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{
+            padding: '0.35rem 0.85rem',
+            borderRadius: '4px',
+            border: '1px solid #ccd4e0',
+            backgroundColor: '#fff',
+            color: '#444',
+            fontSize: '0.85rem',
+            cursor: 'pointer',
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyViewProps) {
   const [pageData, setPageData] = useState<VocabularyPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -320,9 +554,27 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
   const [page, setPage] = useState(1);
   const [pos, setPos] = useState('');
   const [search, setSearch] = useState('');
-  const [includeKnown, setIncludeKnown] = useState(false);
+  const [statuses, setStatuses] = useState<Array<LexemeStatusKey>>([
+    'unseen',
+    'learning',
+    'mastered',
+  ]);
   const [refreshTick, setRefreshTick] = useState(0);
   const [expandedContextIds, setExpandedContextIds] = useState<Record<number, boolean>>({});
+  const [editingLexemeId, setEditingLexemeId] = useState<number | null>(null);
+
+  const toggleStatus = (key: LexemeStatusKey) => {
+    setStatuses((prev) => {
+      const nextSet = new Set(prev);
+      if (nextSet.has(key)) {
+        nextSet.delete(key);
+      } else {
+        nextSet.add(key);
+      }
+      return LEXEME_STATUS_PILLS.map((p) => p.key).filter((k) => nextSet.has(k));
+    });
+    setPage(1);
+  };
 
   const toggleContext = (id: number) => {
     setExpandedContextIds((prev) => ({
@@ -340,10 +592,8 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
       pageSize: 50,
       pos,
       search,
+      statuses,
     };
-    if (includeKnown) {
-      query.includeKnown = true;
-    }
     fetchVocab(bookId, query)
       .then((res) => {
         if (!cancelled) {
@@ -364,13 +614,53 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
     return () => {
       cancelled = true;
     };
-  }, [apiClient, bookId, page, pos, search, includeKnown, refreshTick]);
+  }, [apiClient, bookId, page, pos, search, statuses, refreshTick]);
 
   const handleToggleKnown = async (item: LexemeEntry) => {
     const patchFn = apiClient.patchLexeme ?? defaultApiClient.patchLexeme!;
     const nextKnown = !item.known;
     await patchFn(item.id, { known: nextKnown });
     setRefreshTick((t) => t + 1);
+  };
+
+  const handleSaveEdit = async (
+    item: LexemeEntry,
+    fields: {
+      translations_lt: string[];
+      short_definitions: string[];
+      full_definition: string;
+    }
+  ) => {
+    const patchFn = apiClient.patchLexeme ?? defaultApiClient.patchLexeme!;
+    const res = await patchFn(item.id, fields);
+    setPageData((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      return {
+        ...prev,
+        items: prev.items.map((it) =>
+          it.id === item.id
+            ? {
+                ...it,
+                translations_lt:
+                  'translations_lt' in res && Array.isArray(res.translations_lt)
+                    ? res.translations_lt
+                    : fields.translations_lt,
+                short_definitions:
+                  'short_definitions' in res && Array.isArray(res.short_definitions)
+                    ? res.short_definitions
+                    : fields.short_definitions,
+                full_definition:
+                  'full_definition' in res && typeof res.full_definition === 'string'
+                    ? res.full_definition
+                    : fields.full_definition,
+              }
+            : it
+        ),
+      };
+    });
+    setEditingLexemeId(null);
   };
 
   const items = pageData?.items ?? [];
@@ -470,17 +760,32 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
           </select>
         </label>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={includeKnown}
-            onChange={(e) => {
-              setIncludeKnown(e.target.checked);
-              setPage(1);
-            }}
-          />
-          <span>Show known lexemes</span>
-        </label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+          <span>Status:</span>
+          {LEXEME_STATUS_PILLS.map((pill) => {
+            const active = statuses.includes(pill.key);
+            return (
+              <button
+                key={pill.key}
+                type="button"
+                aria-pressed={active}
+                onClick={() => toggleStatus(pill.key)}
+                style={{
+                  padding: '0.3rem 0.65rem',
+                  borderRadius: '999px',
+                  border: active ? '1px solid #0b57d0' : '1px solid #ccc',
+                  backgroundColor: active ? '#e8f0fe' : '#fff',
+                  color: active ? '#0b57d0' : '#444',
+                  fontSize: '0.85rem',
+                  fontWeight: active ? 600 : 400,
+                  cursor: 'pointer',
+                }}
+              >
+                {pill.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {loading && <p>Loading vocabulary...</p>}
@@ -610,7 +915,34 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
                 >
                   {item.known ? 'Known (Unmark)' : 'Already Known / Ignore'}
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEditingLexemeId((prev) => (prev === item.id ? null : item.id))
+                  }
+                  style={{
+                    background: 'none',
+                    border: '1px solid #ccd4e0',
+                    borderRadius: '4px',
+                    padding: '0.25rem 0.6rem',
+                    fontSize: '0.85rem',
+                    color: '#0b57d0',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Edit
+                </button>
               </div>
+
+              {editingLexemeId === item.id && (
+                <LexemeEditForm
+                  item={item}
+                  apiClient={apiClient}
+                  onSave={(fields) => handleSaveEdit(item, fields)}
+                  onCancel={() => setEditingLexemeId(null)}
+                />
+              )}
 
               {expandedContextIds[item.id] && (
                 <div style={{ marginTop: '0.75rem' }}>
@@ -721,7 +1053,9 @@ function BookQuizView({
   const [answerInput, setAnswerInput] = useState('');
   const [submittedAnswer, setSubmittedAnswer] = useState('');
   const [lastCorrect, setLastCorrect] = useState(false);
+  const [wasFirstAttemptOnReveal, setWasFirstAttemptOnReveal] = useState(false);
   const [excerptOpen, setExcerptOpen] = useState(false);
+  const [editingReveal, setEditingReveal] = useState(false);
 
   const attemptedLexemeIdsRef = useRef<Set<number>>(new Set());
   const answerInputRef = useRef<HTMLInputElement | null>(null);
@@ -771,10 +1105,10 @@ function BookQuizView({
   }, [loading, currentItem, phase]);
 
   useEffect(() => {
-    if (!loading && currentItem && phase === 'reveal') {
+    if (!loading && currentItem && phase === 'reveal' && !editingReveal) {
       nextButtonRef.current?.focus();
     }
-  }, [loading, currentItem, phase]);
+  }, [loading, currentItem, phase, editingReveal]);
 
   const handleSubmitPrompt = (e: React.FormEvent) => {
     e.preventDefault();
@@ -798,8 +1132,63 @@ function BookQuizView({
 
     setSubmittedAnswer(answerInput);
     setLastCorrect(isCorrect);
+    setWasFirstAttemptOnReveal(isFirstAttempt);
     setExcerptOpen(false);
+    setEditingReveal(false);
     setPhase('reveal');
+  };
+
+  const handleSaveQuizEdit = async (fields: {
+    translations_lt: string[];
+    short_definitions: string[];
+    full_definition: string;
+  }) => {
+    if (!currentItem) {
+      return;
+    }
+    const patchFn = apiClient.patchLexeme ?? defaultApiClient.patchLexeme!;
+    const res = await patchFn(currentItem.id, fields);
+
+    const updatedItem: LexemeEntry = {
+      ...currentItem,
+      translations_lt:
+        'translations_lt' in res && Array.isArray(res.translations_lt)
+          ? res.translations_lt
+          : fields.translations_lt,
+      short_definitions:
+        'short_definitions' in res && Array.isArray(res.short_definitions)
+          ? res.short_definitions
+          : fields.short_definitions,
+      full_definition:
+        'full_definition' in res && typeof res.full_definition === 'string'
+          ? res.full_definition
+          : fields.full_definition,
+    };
+
+    const nowMatches =
+      !lastCorrect && evaluateQuizAnswer(submittedAnswer, updatedItem);
+
+    setQueue((prev) => {
+      const mapped = prev.map((it) => (it.id === currentItem.id ? updatedItem : it));
+      if (nowMatches) {
+        return mapped.filter((it, idx) => idx === 0 || it.id !== currentItem.id);
+      }
+      return mapped;
+    });
+
+    if (nowMatches) {
+      setLastCorrect(true);
+      setCorrectCount((c) => c + 1);
+      if (wasFirstAttemptOnReveal) {
+        setWasFirstAttemptOnReveal(false);
+        const recordAttempt =
+          apiClient.recordLexemeAttempt ?? defaultApiClient.recordLexemeAttempt!;
+        void recordAttempt(currentItem.id, { first_attempt_correct: true, correction: true });
+      }
+    }
+
+    setEditingReveal(false);
+    nextButtonRef.current?.focus();
   };
 
   const handleToggleQuizKnown = async () => {
@@ -842,6 +1231,7 @@ function BookQuizView({
     setAnswerInput('');
     setSubmittedAnswer('');
     setExcerptOpen(false);
+    setEditingReveal(false);
     setPhase('prompt');
   };
 
@@ -1127,7 +1517,35 @@ function BookQuizView({
                   >
                     {currentItem.known ? 'Known (Unmark)' : 'Already Known / Ignore'}
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setEditingReveal((v) => !v)}
+                    style={{
+                      background: 'none',
+                      border: '1px solid #ccd4e0',
+                      borderRadius: '6px',
+                      padding: '0.5rem 0.85rem',
+                      fontSize: '0.9rem',
+                      color: '#0b57d0',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Edit
+                  </button>
                 </div>
+
+                {editingReveal && (
+                  <LexemeEditForm
+                    item={currentItem}
+                    apiClient={apiClient}
+                    onSave={handleSaveQuizEdit}
+                    onCancel={() => {
+                      setEditingReveal(false);
+                      nextButtonRef.current?.focus();
+                    }}
+                  />
+                )}
               </div>
             )}
           </div>

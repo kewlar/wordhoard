@@ -10,20 +10,36 @@ import (
 	"strconv"
 	"strings"
 
-	"ebook-vocab/internal/db"
+	"wordhoard/internal/db"
+	"wordhoard/internal/enrich"
+	"wordhoard/internal/translate"
 )
 
-type Server struct {
-	store *db.Store
-	spaFS fs.FS
-	mux   *http.ServeMux
+type Option func(*Server)
+
+func WithTranslator(t translate.Translator) Option {
+	return func(s *Server) {
+		s.translator = t
+	}
 }
 
-func NewHandler(store *db.Store, spaFS fs.FS) http.Handler {
+type Server struct {
+	store      *db.Store
+	spaFS      fs.FS
+	translator translate.Translator
+	mux        *http.ServeMux
+}
+
+func NewHandler(store *db.Store, spaFS fs.FS, opts ...Option) http.Handler {
 	s := &Server{
 		store: store,
 		spaFS: spaFS,
 		mux:   http.NewServeMux(),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
 	}
 	s.mux.HandleFunc("GET /api/books", s.handleListBooks)
 	s.mux.HandleFunc("GET /api/books/{id}", s.handleGetBook)
@@ -31,6 +47,7 @@ func NewHandler(store *db.Store, spaFS fs.FS) http.Handler {
 	s.mux.HandleFunc("POST /api/books/{id}/quiz", s.handleCreateBookQuiz)
 	s.mux.HandleFunc("PATCH /api/lexemes/{id}", s.handlePatchLexeme)
 	s.mux.HandleFunc("POST /api/lexemes/{id}/attempt", s.handlePostLexemeAttempt)
+	s.mux.HandleFunc("POST /api/lexemes/{id}/translate", s.handleTranslateLexeme)
 	s.mux.HandleFunc("/", s.handleSPA)
 	return s.mux
 }
@@ -92,12 +109,24 @@ func (s *Server) handleGetBookVocabulary(w http.ResponseWriter, r *http.Request)
 		includeKnown = true
 	}
 
+	var statuses []string // nil: no status filter
+	if q.Has("statuses") {
+		statuses = []string{}
+		for _, part := range strings.Split(q.Get("statuses"), ",") {
+			st := strings.ToLower(strings.TrimSpace(part))
+			if st != "" {
+				statuses = append(statuses, st)
+			}
+		}
+	}
+
 	vocabPage, err := s.store.ListBookVocabulary(id, db.VocabularyFilter{
 		Page:         page,
 		PageSize:     pageSize,
 		POS:          q.Get("pos"),
 		Search:       q.Get("search"),
 		IncludeKnown: includeKnown,
+		Statuses:     statuses,
 	})
 	if errors.Is(err, db.ErrBookNotFound) {
 		writeJSONError(w, http.StatusNotFound, "book not found")
@@ -154,14 +183,22 @@ func (s *Server) handlePatchLexeme(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Known *bool `json:"known"`
+		Known            *bool     `json:"known"`
+		FullDefinition   *string   `json:"full_definition"`
+		ShortDefinitions *[]string `json:"short_definitions"`
+		TranslationsLT   *[]string `json:"translations_lt"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	updated, err := s.store.UpdateLexeme(id, body.Known)
+	updated, err := s.store.PatchLexeme(id, db.LexemePatch{
+		Known:            body.Known,
+		FullDefinition:   body.FullDefinition,
+		ShortDefinitions: body.ShortDefinitions,
+		TranslationsLT:   body.TranslationsLT,
+	})
 	if errors.Is(err, db.ErrLexemeNotFound) {
 		writeJSONError(w, http.StatusNotFound, "lexeme not found")
 		return
@@ -183,13 +220,16 @@ func (s *Server) handlePostLexemeAttempt(w http.ResponseWriter, r *http.Request)
 
 	var body struct {
 		FirstAttemptCorrect *bool `json:"first_attempt_correct"`
+		// Correction replaces the lexeme's last first-attempt transition
+		// (e.g. after an edit makes a wrong quiz answer correct).
+		Correction bool `json:"correction"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.FirstAttemptCorrect == nil {
 		writeJSONError(w, http.StatusBadRequest, "first_attempt_correct is required")
 		return
 	}
 
-	updated, err := s.store.RecordLexemeAttempt(id, *body.FirstAttemptCorrect)
+	updated, err := s.store.RecordLexemeAttempt(id, *body.FirstAttemptCorrect, body.Correction)
 	if errors.Is(err, db.ErrLexemeNotFound) {
 		writeJSONError(w, http.StatusNotFound, "lexeme not found")
 		return
@@ -202,6 +242,55 @@ func (s *Server) handlePostLexemeAttempt(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, updated)
 }
 
+func (s *Server) handleTranslateLexeme(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid lexeme id")
+		return
+	}
+
+	lex, err := s.store.GetLexeme(id)
+	if errors.Is(err, db.ErrLexemeNotFound) {
+		writeJSONError(w, http.StatusNotFound, "lexeme not found")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if s.translator == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "online translator is not configured")
+		return
+	}
+
+	batchRes, err := s.translator.TranslateBatch(r.Context(), []translate.Request{enrich.RequestFor(*lex)})
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	fetched := batchRes[lex.ID]
+	if fetched == nil {
+		fetched = []string{}
+	}
+
+	if _, err := s.store.AppendOnlineTranslations(id, fetched); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	updated, err := s.store.GetLexeme(id)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fetched_translations_lt": fetched,
+		"lexeme":                  updated,
+	})
+}
 
 func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/api/") {
@@ -210,7 +299,7 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.spaFS == nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.WriteString(w, "<!doctype html><html><body><div id=\"root\">Ebook Vocabulary</div></body></html>")
+		_, _ = io.WriteString(w, "<!doctype html><html><body><div id=\"root\">Wordhoard</div></body></html>")
 		return
 	}
 

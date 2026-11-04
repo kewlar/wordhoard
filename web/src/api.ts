@@ -52,15 +52,18 @@ export interface VocabularyPage {
   total_pages: number;
 }
 
+export type LexemeStatusKey = 'unseen' | 'learning' | 'mastered' | 'known';
+
 export interface VocabularyQuery {
   page?: number;
   pageSize?: number;
   pos?: string;
   search?: string;
   includeKnown?: boolean;
+  statuses?: LexemeStatusKey[];
 }
 
-export interface LexemeStatus {
+export interface LexemeProgress {
   id: number;
   lemma: string;
   pos: string;
@@ -69,9 +72,27 @@ export interface LexemeStatus {
   last_quizzed_at?: string;
 }
 
+export interface LexemeAttempt {
+  first_attempt_correct: boolean;
+  /** Replaces the last first-attempt transition, computing from the pre-attempt Mastery Level. */
+  correction?: boolean;
+}
+
 export interface QuizSession {
   book?: BookSummary;
   items: LexemeEntry[];
+}
+
+export interface LexemePatch {
+  known?: boolean;
+  full_definition?: string;
+  short_definitions?: string[];
+  translations_lt?: string[];
+}
+
+export interface TranslateLexemeResponse {
+  fetched_translations_lt: string[];
+  lexeme?: LexemeEntry;
 }
 
 export interface ApiClient {
@@ -79,13 +100,14 @@ export interface ApiClient {
   getBookVocabulary?(bookId: number, query?: VocabularyQuery): Promise<VocabularyPage>;
   patchLexeme?(
     lexemeId: number,
-    patch: { known?: boolean }
-  ): Promise<LexemeStatus>;
+    patch: LexemePatch
+  ): Promise<LexemeEntry | LexemeProgress>;
+  translateLexeme?(lexemeId: number): Promise<TranslateLexemeResponse>;
   startBookQuiz?(bookId: number, size?: number): Promise<QuizSession>;
   recordLexemeAttempt?(
     lexemeId: number,
-    attempt: { first_attempt_correct: boolean }
-  ): Promise<LexemeStatus>;
+    attempt: LexemeAttempt
+  ): Promise<LexemeProgress>;
 }
 
 export const defaultApiClient: ApiClient = {
@@ -112,7 +134,9 @@ export const defaultApiClient: ApiClient = {
     if (query.search) {
       params.set('search', query.search);
     }
-    if (query.includeKnown) {
+    if (query.statuses !== undefined) {
+      params.set('statuses', query.statuses.join(','));
+    } else if (query.includeKnown) {
       params.set('include_known', 'true');
     }
     const qs = params.toString();
@@ -126,8 +150,8 @@ export const defaultApiClient: ApiClient = {
 
   async patchLexeme(
     lexemeId: number,
-    patch: { known?: boolean }
-  ): Promise<LexemeStatus> {
+    patch: LexemePatch
+  ): Promise<LexemeEntry | LexemeProgress> {
     const res = await fetch(`/api/lexemes/${lexemeId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -136,7 +160,17 @@ export const defaultApiClient: ApiClient = {
     if (!res.ok) {
       throw new Error(`Failed to update lexeme (${res.status})`);
     }
-    return (await res.json()) as LexemeStatus;
+    return (await res.json()) as LexemeEntry | LexemeProgress;
+  },
+
+  async translateLexeme(lexemeId: number): Promise<TranslateLexemeResponse> {
+    const res = await fetch(`/api/lexemes/${lexemeId}/translate`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to fetch translations (${res.status})`);
+    }
+    return (await res.json()) as TranslateLexemeResponse;
   },
 
   async startBookQuiz(bookId: number, size = 20): Promise<QuizSession> {
@@ -153,8 +187,8 @@ export const defaultApiClient: ApiClient = {
 
   async recordLexemeAttempt(
     lexemeId: number,
-    attempt: { first_attempt_correct: boolean }
-  ): Promise<LexemeStatus> {
+    attempt: LexemeAttempt
+  ): Promise<LexemeProgress> {
     const res = await fetch(`/api/lexemes/${lexemeId}/attempt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -163,7 +197,7 @@ export const defaultApiClient: ApiClient = {
     if (!res.ok) {
       throw new Error(`Failed to record lexeme attempt (${res.status})`);
     }
-    return (await res.json()) as LexemeStatus;
+    return (await res.json()) as LexemeProgress;
   },
 };
 

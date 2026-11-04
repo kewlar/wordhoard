@@ -15,9 +15,9 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/tsawler/prose/v3"
 
-	"ebook-vocab/internal/db"
-	"ebook-vocab/internal/dictionary"
-	"ebook-vocab/internal/epub"
+	"wordhoard/internal/db"
+	"wordhoard/internal/dictionary"
+	"wordhoard/internal/epub"
 )
 
 type Option func(*config)
@@ -542,7 +542,7 @@ func (m tuiModel) View() string {
 
 func renderDashboard(files []FileResult, summary Summary, finished bool) string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Ebook Vocabulary Ingester"))
+	b.WriteString(titleStyle.Render("Wordhoard Ingester"))
 	b.WriteString("\n\n")
 
 	if len(files) == 0 {
