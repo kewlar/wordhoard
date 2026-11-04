@@ -78,12 +78,14 @@ func runCLI(args []string, out io.Writer) error {
 			spaFS = os.DirFS(*webDir)
 		}
 
-		var opts []server.Option
-		if tr, err := translate.NewFromEnv(); err == nil {
-			opts = append(opts, server.WithTranslator(tr))
+		tr, err := newTranslator()
+		if err != nil {
+			// Serve anyway; "Fetch translations" reports the configuration error.
+			fmt.Fprintf(out, "warning: online translator unavailable: %v\n", err)
+			tr = translate.Unavailable(err)
 		}
 
-		handler := server.NewHandler(store, spaFS, opts...)
+		handler := server.NewHandler(store, spaFS, server.WithTranslator(tr))
 		fmt.Fprintf(out, "Listening on %s (database: %s)\n", *addr, *dbPath)
 		return http.ListenAndServe(*addr, handler)
 

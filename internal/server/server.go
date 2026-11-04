@@ -259,17 +259,12 @@ func (s *Server) handleTranslateLexeme(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tr := s.translator
-	if tr == nil {
-		var trErr error
-		tr, trErr = translate.NewFromEnv()
-		if trErr != nil {
-			writeJSONError(w, http.StatusInternalServerError, trErr.Error())
-			return
-		}
+	if s.translator == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "online translator is not configured")
+		return
 	}
 
-	batchRes, err := tr.TranslateBatch(r.Context(), []translate.Request{enrich.RequestFor(*lex)})
+	batchRes, err := s.translator.TranslateBatch(r.Context(), []translate.Request{enrich.RequestFor(*lex)})
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, err.Error())
 		return

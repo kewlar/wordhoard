@@ -103,6 +103,18 @@ func NewFromEnv(envPaths ...string) (Translator, error) {
 	return New(cfg)
 }
 
+// Unavailable returns a Translator whose every call fails with err, used when
+// the configured provider cannot be built (e.g. a missing API key).
+func Unavailable(err error) Translator {
+	return unavailableTranslator{err: err}
+}
+
+type unavailableTranslator struct{ err error }
+
+func (u unavailableTranslator) TranslateBatch(context.Context, []Request) (map[int64][]string, error) {
+	return nil, u.err
+}
+
 func New(cfg Config) (Translator, error) {
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	if provider == "" {
