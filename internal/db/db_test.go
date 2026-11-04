@@ -320,7 +320,7 @@ func TestLexemeSourcesResolutionAndPreservation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLexemeSources: %v", err)
 	}
-	offlineSrc, ok := sources["offline"]
+	offlineSrc, ok := sources[db.SourceOffline]
 	if !ok {
 		t.Fatalf("expected 'offline' source row to exist after SaveBookLexemes")
 	}
@@ -419,17 +419,17 @@ func TestLexemeSourcesResolutionAndPreservation(t *testing.T) {
 	if len(sourcesAfter) != 3 {
 		t.Fatalf("expected 3 sources (offline, online, user), got %d", len(sourcesAfter))
 	}
-	if sourcesAfter["offline"].FullDefinition != "1. Brief and to the point" ||
-		len(sourcesAfter["offline"].TranslationsLT) != 1 || sourcesAfter["offline"].TranslationsLT[0] != "lakoniškas" {
-		t.Errorf("offline source was modified: %+v", sourcesAfter["offline"])
+	if sourcesAfter[db.SourceOffline].FullDefinition != "1. Brief and to the point" ||
+		len(sourcesAfter[db.SourceOffline].TranslationsLT) != 1 || sourcesAfter[db.SourceOffline].TranslationsLT[0] != "lakoniškas" {
+		t.Errorf("offline source was modified: %+v", sourcesAfter[db.SourceOffline])
 	}
-	if sourcesAfter["online"].FullDefinition != "Online definition fallback" ||
-		len(sourcesAfter["online"].TranslationsLT) != 3 || sourcesAfter["online"].TranslationsLT[1] != "glaustas" {
-		t.Errorf("online source was modified: %+v", sourcesAfter["online"])
+	if sourcesAfter[db.SourceOnline].FullDefinition != "Online definition fallback" ||
+		len(sourcesAfter[db.SourceOnline].TranslationsLT) != 3 || sourcesAfter[db.SourceOnline].TranslationsLT[1] != "glaustas" {
+		t.Errorf("online source was modified: %+v", sourcesAfter[db.SourceOnline])
 	}
-	if sourcesAfter["user"].FullDefinition != userDef ||
-		len(sourcesAfter["user"].ShortDefinitions) != 2 || sourcesAfter["user"].ShortDefinitions[0] != "brief" {
-		t.Errorf("unexpected user source: %+v", sourcesAfter["user"])
+	if sourcesAfter[db.SourceUser].FullDefinition != userDef ||
+		len(sourcesAfter[db.SourceUser].ShortDefinitions) != 2 || sourcesAfter[db.SourceUser].ShortDefinitions[0] != "brief" {
+		t.Errorf("unexpected user source: %+v", sourcesAfter[db.SourceUser])
 	}
 }
 

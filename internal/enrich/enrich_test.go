@@ -93,11 +93,11 @@ func TestRunTranslatesCandidatesInBatchesAndPersistsOnlineSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLexemeSources: %v", err)
 	}
-	if got := strings.Join(srcs["online"].TranslationsLT, ","); got != "užsispyręs,kietaširdis" {
+	if got := strings.Join(srcs[db.SourceOnline].TranslationsLT, ","); got != "užsispyręs,kietaširdis" {
 		t.Errorf("online translations = %q", got)
 	}
-	if srcs["offline"].FullDefinition != "stubborn" {
-		t.Errorf("offline source must be preserved, got %+v", srcs["offline"])
+	if srcs[db.SourceOffline].FullDefinition != "stubborn" {
+		t.Errorf("offline source must be preserved, got %+v", srcs[db.SourceOffline])
 	}
 	lex, err := store.GetLexeme(lexemeID(t, store, "perfidy"))
 	if err != nil {

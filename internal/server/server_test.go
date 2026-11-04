@@ -881,12 +881,12 @@ func TestPatchLexemeSavesUserSourceAndPreservesOfflineOnlineSources(t *testing.T
 	if err != nil {
 		t.Fatalf("GetLexemeSources: %v", err)
 	}
-	if sources["offline"].FullDefinition != "1. Brief and to the point" ||
-		len(sources["offline"].TranslationsLT) != 1 || sources["offline"].TranslationsLT[0] != "lakoniškas" {
-		t.Errorf("expected offline source untouched, got %+v", sources["offline"])
+	if sources[db.SourceOffline].FullDefinition != "1. Brief and to the point" ||
+		len(sources[db.SourceOffline].TranslationsLT) != 1 || sources[db.SourceOffline].TranslationsLT[0] != "lakoniškas" {
+		t.Errorf("expected offline source untouched, got %+v", sources[db.SourceOffline])
 	}
-	if len(sources["online"].TranslationsLT) != 1 || sources["online"].TranslationsLT[0] != "glaustas" {
-		t.Errorf("expected online source untouched, got %+v", sources["online"])
+	if len(sources[db.SourceOnline].TranslationsLT) != 1 || sources[db.SourceOnline].TranslationsLT[0] != "glaustas" {
+		t.Errorf("expected online source untouched, got %+v", sources[db.SourceOnline])
 	}
 }
 
@@ -1002,11 +1002,11 @@ func TestTranslateLexemeEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLexemeSources: %v", err)
 	}
-	if len(sources["online"].TranslationsLT) != 2 || sources["online"].TranslationsLT[0] != "glaustas" || sources["online"].TranslationsLT[1] != "trumpas" {
-		t.Errorf("expected online source to have [glaustas, trumpas], got %+v", sources["online"])
+	if len(sources[db.SourceOnline].TranslationsLT) != 2 || sources[db.SourceOnline].TranslationsLT[0] != "glaustas" || sources[db.SourceOnline].TranslationsLT[1] != "trumpas" {
+		t.Errorf("expected online source to have [glaustas, trumpas], got %+v", sources[db.SourceOnline])
 	}
-	if len(sources["offline"].TranslationsLT) != 1 || sources["offline"].TranslationsLT[0] != "lakoniškas" {
-		t.Errorf("expected offline source untouched [lakoniškas], got %+v", sources["offline"])
+	if len(sources[db.SourceOffline].TranslationsLT) != 1 || sources[db.SourceOffline].TranslationsLT[0] != "lakoniškas" {
+		t.Errorf("expected offline source untouched [lakoniškas], got %+v", sources[db.SourceOffline])
 	}
 
 	// Verify 404 on unknown lexeme ID
