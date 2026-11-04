@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"wordhoard/internal/db"
+	"wordhoard/internal/enrich"
 	"wordhoard/internal/translate"
 )
 
@@ -270,15 +271,7 @@ func (s *Server) handleTranslateLexeme(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	batchRes, err := tr.TranslateBatch(r.Context(), []translate.Request{
-		{
-			ID:             lex.ID,
-			Lemma:          lex.Lemma,
-			POS:            lex.POS,
-			PromptForm:     lex.PromptForm,
-			FullDefinition: lex.FullDefinition,
-		},
-	})
+	batchRes, err := tr.TranslateBatch(r.Context(), []translate.Request{enrich.RequestFor(*lex)})
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, err.Error())
 		return
@@ -289,17 +282,7 @@ func (s *Server) handleTranslateLexeme(w http.ResponseWriter, r *http.Request) {
 		fetched = []string{}
 	}
 
-	sources, err := s.store.GetLexemeSources(id)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	onlineSrc := sources[db.SourceOnline]
-	mergedOnlineLT := mergeUniqueStrings(onlineSrc.TranslationsLT, fetched)
-
-	content := onlineSrc.SourceContent
-	content.TranslationsLT = mergedOnlineLT
-	if err := s.store.UpsertLexemeSource(id, db.SourceOnline, content); err != nil {
+	if _, err := s.store.AppendOnlineTranslations(id, fetched); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -315,27 +298,6 @@ func (s *Server) handleTranslateLexeme(w http.ResponseWriter, r *http.Request) {
 		"lexeme":                  updated,
 	})
 }
-
-func mergeUniqueStrings(slices ...[]string) []string {
-	seen := make(map[string]struct{})
-	out := make([]string, 0)
-	for _, sl := range slices {
-		for _, item := range sl {
-			trimmed := strings.TrimSpace(item)
-			if trimmed == "" {
-				continue
-			}
-			key := strings.ToLower(trimmed)
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			out = append(out, trimmed)
-		}
-	}
-	return out
-}
-
 
 func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/api/") {

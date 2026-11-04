@@ -6,7 +6,6 @@ package enrich
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"wordhoard/internal/db"
 	"wordhoard/internal/translate"
@@ -70,13 +69,7 @@ func Run(ctx context.Context, store *db.Store, tr translate.Translator, opts Opt
 
 		reqs := make([]translate.Request, len(chunk))
 		for i, lex := range chunk {
-			reqs[i] = translate.Request{
-				ID:             lex.ID,
-				Lemma:          lex.Lemma,
-				POS:            lex.POS,
-				PromptForm:     lex.PromptForm,
-				FullDefinition: lex.FullDefinition,
-			}
+			reqs[i] = RequestFor(lex)
 		}
 
 		results, trErr := tr.TranslateBatch(ctx, reqs)
@@ -86,7 +79,7 @@ func Run(ctx context.Context, store *db.Store, tr translate.Translator, opts Opt
 			p.Status = fmt.Sprintf("batch %d/%d failed: %v", batch, batches, trErr)
 		} else {
 			for _, lex := range chunk {
-				translated, err := persistOnline(store, lex.ID, results[lex.ID])
+				translated, err := store.AppendOnlineTranslations(lex.ID, results[lex.ID])
 				if err != nil {
 					return summary, err
 				}
@@ -106,42 +99,14 @@ func Run(ctx context.Context, store *db.Store, tr translate.Translator, opts Opt
 	return summary, nil
 }
 
-// persistOnline merges fetched translations into the lexeme's `online` source,
-// keeping any other online fields intact. It never touches offline or user rows.
-func persistOnline(store *db.Store, lexemeID int64, fetched []string) (bool, error) {
-	clean := make([]string, 0, len(fetched))
-	for _, s := range fetched {
-		if s = strings.TrimSpace(s); s != "" {
-			clean = append(clean, s)
-		}
+// RequestFor builds the translation request for a Lexeme, giving the provider
+// its Part of Speech, Prompt Form and Full Definition as context.
+func RequestFor(lex db.LexemeEntry) translate.Request {
+	return translate.Request{
+		ID:             lex.ID,
+		Lemma:          lex.Lemma,
+		POS:            lex.POS,
+		PromptForm:     lex.PromptForm,
+		FullDefinition: lex.FullDefinition,
 	}
-	if len(clean) == 0 {
-		return false, nil
-	}
-	sources, err := store.GetLexemeSources(lexemeID)
-	if err != nil {
-		return false, err
-	}
-	online := sources[db.SourceOnline]
-	merged := append(append([]string{}, online.TranslationsLT...), clean...)
-	content := online.SourceContent
-	content.TranslationsLT = dedupe(merged)
-	if err := store.UpsertLexemeSource(lexemeID, db.SourceOnline, content); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func dedupe(in []string) []string {
-	seen := make(map[string]struct{}, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		key := strings.ToLower(s)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, s)
-	}
-	return out
 }

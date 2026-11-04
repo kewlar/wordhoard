@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"wordhoard/internal/strlist"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -659,25 +661,6 @@ func (s *Store) attachExcerpts(bookID int64, entries []LexemeEntry) error {
 	return nil
 }
 
-func deduplicateStrings(slices ...[]string) []string {
-	seen := make(map[string]struct{})
-	out := make([]string, 0)
-	for _, list := range slices {
-		for _, item := range list {
-			trimmed := strings.TrimSpace(item)
-			if trimmed == "" {
-				continue
-			}
-			key := strings.ToLower(trimmed)
-			if _, exists := seen[key]; !exists {
-				seen[key] = struct{}{}
-				out = append(out, trimmed)
-			}
-		}
-	}
-	return out
-}
-
 // decodeStringList decodes a JSON string array column, treating malformed or
 // null values as empty.
 func decodeStringList(raw string) []string {
@@ -738,8 +721,8 @@ func resolveEntryFromSources(entry *LexemeEntry, srcMap map[SourceTier]LexemeSou
 		entry.FullDefinition = offlineSrc.FullDefinition
 	}
 
-	entry.ShortDefinitions = deduplicateStrings(offlineSrc.ShortDefinitions, onlineSrc.ShortDefinitions)
-	entry.TranslationsLT = deduplicateStrings(offlineSrc.TranslationsLT, onlineSrc.TranslationsLT)
+	entry.ShortDefinitions = strlist.MergeUnique(offlineSrc.ShortDefinitions, onlineSrc.ShortDefinitions)
+	entry.TranslationsLT = strlist.MergeUnique(offlineSrc.TranslationsLT, onlineSrc.TranslationsLT)
 }
 
 func (s *Store) attachSources(entries []LexemeEntry) error {
@@ -806,6 +789,27 @@ func (s *Store) UpsertLexemeSource(lexemeID int64, source SourceTier, content So
 	}
 	_, err = s.db.Exec(upsertLexemeSourceSQL, lexemeID, source, content.FullDefinition, shortJSON, ltJSON)
 	return err
+}
+
+// AppendOnlineTranslations merges translations into the lexeme's `online`
+// source, keeping its other fields and the offline and user sources intact.
+// It reports whether any non-blank translation was given; otherwise nothing
+// is written.
+func (s *Store) AppendOnlineTranslations(lexemeID int64, translations []string) (bool, error) {
+	fetched := strlist.MergeUnique(translations)
+	if len(fetched) == 0 {
+		return false, nil
+	}
+	sources, err := s.GetLexemeSources(lexemeID)
+	if err != nil {
+		return false, err
+	}
+	content := sources[SourceOnline].SourceContent
+	content.TranslationsLT = strlist.MergeUnique(content.TranslationsLT, fetched)
+	if err := s.UpsertLexemeSource(lexemeID, SourceOnline, content); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) GetLexemeSources(lexemeID int64) (map[SourceTier]LexemeSource, error) {

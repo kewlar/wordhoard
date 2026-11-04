@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"wordhoard/internal/strlist"
 )
 
 const (
@@ -269,7 +271,7 @@ func parseBatchTranslationsJSON(raw string) (map[int64][]string, error) {
 	}
 	if err := json.Unmarshal([]byte(cleaned), &wrapped); err == nil && wrapped.Items != nil {
 		for _, item := range wrapped.Items {
-			out[item.ID] = cleanTranslations(item.TranslationsLT)
+			out[item.ID] = strlist.MergeUnique(item.TranslationsLT)
 		}
 		return out, nil
 	}
@@ -280,7 +282,7 @@ func parseBatchTranslationsJSON(raw string) (map[int64][]string, error) {
 	}
 	if err := json.Unmarshal([]byte(cleaned), &list); err == nil && list != nil {
 		for _, item := range list {
-			out[item.ID] = cleanTranslations(item.TranslationsLT)
+			out[item.ID] = strlist.MergeUnique(item.TranslationsLT)
 		}
 		return out, nil
 	}
@@ -289,31 +291,13 @@ func parseBatchTranslationsJSON(raw string) (map[int64][]string, error) {
 	if err := json.Unmarshal([]byte(cleaned), &directMap); err == nil && directMap != nil {
 		for k, v := range directMap {
 			if id, parseErr := strconv.ParseInt(k, 10, 64); parseErr == nil {
-				out[id] = cleanTranslations(v)
+				out[id] = strlist.MergeUnique(v)
 			}
 		}
 		return out, nil
 	}
 
 	return nil, fmt.Errorf("failed to parse translator JSON response: %s", raw)
-}
-
-func cleanTranslations(in []string) []string {
-	seen := make(map[string]struct{}, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		trimmed := strings.TrimSpace(s)
-		if trimmed == "" {
-			continue
-		}
-		lower := strings.ToLower(trimmed)
-		if _, ok := seen[lower]; ok {
-			continue
-		}
-		seen[lower] = struct{}{}
-		out = append(out, trimmed)
-	}
-	return out
 }
 
 type geminiTranslator struct {
@@ -523,7 +507,7 @@ func (d *deepLTranslator) TranslateBatch(ctx context.Context, items []Request) (
 				rawList = append(rawList, part)
 			}
 		}
-		out[item.ID] = cleanTranslations(rawList)
+		out[item.ID] = strlist.MergeUnique(rawList)
 	}
 
 	return out, nil
