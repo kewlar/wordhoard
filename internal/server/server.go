@@ -109,11 +109,10 @@ func (s *Server) handleGetBookVocabulary(w http.ResponseWriter, r *http.Request)
 		includeKnown = true
 	}
 
-	var statuses []string
-	statusesProvided := q.Has("statuses")
-	if statusesProvided {
-		raw := q.Get("statuses")
-		for _, part := range strings.Split(raw, ",") {
+	var statuses []string // nil: no status filter
+	if q.Has("statuses") {
+		statuses = []string{}
+		for _, part := range strings.Split(q.Get("statuses"), ",") {
 			st := strings.ToLower(strings.TrimSpace(part))
 			if st != "" {
 				statuses = append(statuses, st)
@@ -122,13 +121,12 @@ func (s *Server) handleGetBookVocabulary(w http.ResponseWriter, r *http.Request)
 	}
 
 	vocabPage, err := s.store.ListBookVocabulary(id, db.VocabularyFilter{
-		Page:             page,
-		PageSize:         pageSize,
-		POS:              q.Get("pos"),
-		Search:           q.Get("search"),
-		IncludeKnown:     includeKnown,
-		StatusesProvided: statusesProvided,
-		Statuses:         statuses,
+		Page:         page,
+		PageSize:     pageSize,
+		POS:          q.Get("pos"),
+		Search:       q.Get("search"),
+		IncludeKnown: includeKnown,
+		Statuses:     statuses,
 	})
 	if errors.Is(err, db.ErrBookNotFound) {
 		writeJSONError(w, http.StatusNotFound, "book not found")

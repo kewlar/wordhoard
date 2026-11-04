@@ -93,13 +93,24 @@ type LexemeEntry struct {
 }
 
 type VocabularyFilter struct {
-	Page             int
-	PageSize         int
-	POS              string
-	Search           string
-	IncludeKnown     bool
-	StatusesProvided bool
-	Statuses         []string
+	Page         int
+	PageSize     int
+	POS          string
+	Search       string
+	IncludeKnown bool
+	// Statuses filters by Lexeme Status keys (see lexemeStatusSQL). A nil
+	// slice means no status filter (IncludeKnown applies instead); a non-nil
+	// empty slice matches nothing.
+	Statuses []string
+}
+
+// lexemeStatusSQL defines each Lexeme Status (GLOSSARY) as a SQL predicate
+// over lexemes aliased as l.
+var lexemeStatusSQL = map[string]string{
+	"unseen":   "(l.known = 0 AND l.mastery_level = 0)",
+	"learning": "(l.known = 0 AND l.mastery_level BETWEEN 1 AND 4)",
+	"mastered": "(l.known = 0 AND l.mastery_level >= 5)",
+	"known":    "(l.known = 1)",
 }
 
 type LexemeProgress struct {
@@ -866,18 +877,11 @@ func (s *Store) ListBookVocabulary(bookID int64, filter VocabularyFilter) (Vocab
 	whereClauses = append(whereClauses, "bl.book_id = ?")
 	args = append(args, bookID)
 
-	if filter.StatusesProvided {
+	if filter.Statuses != nil {
 		var statusClauses []string
 		for _, rawStatus := range filter.Statuses {
-			switch strings.ToLower(strings.TrimSpace(rawStatus)) {
-			case "unseen":
-				statusClauses = append(statusClauses, "(l.known = 0 AND l.mastery_level = 0)")
-			case "learning":
-				statusClauses = append(statusClauses, "(l.known = 0 AND l.mastery_level BETWEEN 1 AND 4)")
-			case "mastered":
-				statusClauses = append(statusClauses, "(l.known = 0 AND l.mastery_level >= 5)")
-			case "known":
-				statusClauses = append(statusClauses, "(l.known = 1)")
+			if clause, ok := lexemeStatusSQL[strings.ToLower(strings.TrimSpace(rawStatus))]; ok {
+				statusClauses = append(statusClauses, clause)
 			}
 		}
 		if len(statusClauses) == 0 {
