@@ -11,19 +11,34 @@ import (
 	"strings"
 
 	"wordhoard/internal/db"
+	"wordhoard/internal/translate"
 )
 
-type Server struct {
-	store *db.Store
-	spaFS fs.FS
-	mux   *http.ServeMux
+type Option func(*Server)
+
+func WithTranslator(t translate.Translator) Option {
+	return func(s *Server) {
+		s.translator = t
+	}
 }
 
-func NewHandler(store *db.Store, spaFS fs.FS) http.Handler {
+type Server struct {
+	store      *db.Store
+	spaFS      fs.FS
+	translator translate.Translator
+	mux        *http.ServeMux
+}
+
+func NewHandler(store *db.Store, spaFS fs.FS, opts ...Option) http.Handler {
 	s := &Server{
 		store: store,
 		spaFS: spaFS,
 		mux:   http.NewServeMux(),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
 	}
 	s.mux.HandleFunc("GET /api/books", s.handleListBooks)
 	s.mux.HandleFunc("GET /api/books/{id}", s.handleGetBook)
@@ -31,6 +46,7 @@ func NewHandler(store *db.Store, spaFS fs.FS) http.Handler {
 	s.mux.HandleFunc("POST /api/books/{id}/quiz", s.handleCreateBookQuiz)
 	s.mux.HandleFunc("PATCH /api/lexemes/{id}", s.handlePatchLexeme)
 	s.mux.HandleFunc("POST /api/lexemes/{id}/attempt", s.handlePostLexemeAttempt)
+	s.mux.HandleFunc("POST /api/lexemes/{id}/translate", s.handleTranslateLexeme)
 	s.mux.HandleFunc("/", s.handleSPA)
 	return s.mux
 }
@@ -222,6 +238,97 @@ func (s *Server) handlePostLexemeAttempt(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handleTranslateLexeme(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid lexeme id")
+		return
+	}
+
+	lex, err := s.store.GetLexeme(id)
+	if errors.Is(err, db.ErrLexemeNotFound) {
+		writeJSONError(w, http.StatusNotFound, "lexeme not found")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	tr := s.translator
+	if tr == nil {
+		var trErr error
+		tr, trErr = translate.NewFromEnv()
+		if trErr != nil {
+			writeJSONError(w, http.StatusInternalServerError, trErr.Error())
+			return
+		}
+	}
+
+	batchRes, err := tr.TranslateBatch(r.Context(), []translate.TranslateRequest{
+		{
+			ID:             lex.ID,
+			Lemma:          lex.Lemma,
+			POS:            lex.POS,
+			PromptForm:     lex.PromptForm,
+			FullDefinition: lex.FullDefinition,
+		},
+	})
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	fetched := batchRes[lex.ID]
+	if fetched == nil {
+		fetched = []string{}
+	}
+
+	sources, err := s.store.GetLexemeSources(id)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	onlineSrc := sources["online"]
+	mergedOnlineLT := mergeUniqueStrings(onlineSrc.TranslationsLT, fetched)
+
+	if err := s.store.UpsertLexemeSource(id, "online", onlineSrc.FullDefinition, onlineSrc.ShortDefinitions, mergedOnlineLT); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	updated, err := s.store.GetLexeme(id)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fetched_translations_lt": fetched,
+		"lexeme":                  updated,
+	})
+}
+
+func mergeUniqueStrings(slices ...[]string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, sl := range slices {
+		for _, item := range sl {
+			trimmed := strings.TrimSpace(item)
+			if trimmed == "" {
+				continue
+			}
+			key := strings.ToLower(trimmed)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 

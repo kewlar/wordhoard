@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"wordhoard/internal/dictionary"
 	"wordhoard/internal/ingest"
 	"wordhoard/internal/server"
+	"wordhoard/internal/translate"
 )
 
 func createTestEPUB(t *testing.T, dir, filename, title, author string) string {
@@ -887,6 +889,137 @@ func TestPatchLexemeSavesUserSourceAndPreservesOfflineOnlineSources(t *testing.T
 		t.Errorf("expected online source untouched, got %+v", sources["online"])
 	}
 }
+
+func TestTranslateLexemeEndpoint(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer store.Close()
+
+	book, _, err := store.CreateBook(db.BookInput{
+		Title:    "Translate Endpoint Book",
+		Author:   "Author T",
+		Filename: "/books/translate.epub",
+		FileSize: 4096,
+		SHA256:   "sha-translate",
+	})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+
+	err = store.SaveBookLexemes(book.ID, []db.LexemeInput{
+		{
+			Lemma:            "laconic",
+			POS:              "adjective",
+			PromptForm:       "laconic (adj.)",
+			CEFRLevel:        "c1",
+			GlobalZipfFreq:   2.2,
+			FullDefinition:   "1. Brief and to the point",
+			ShortDefinitions: []string{"concise", "terse"},
+			TranslationsLT:   []string{"lakoniškas"},
+			OccurrenceCount:  2,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveBookLexemes: %v", err)
+	}
+
+	page, err := store.ListBookVocabulary(book.ID, db.VocabularyFilter{Page: 1, PageSize: 10})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("ListBookVocabulary: err=%v len=%d", err, len(page.Items))
+	}
+	lexemeID := page.Items[0].ID
+
+	var geminiReqBody string
+	geminiStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		geminiReqBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, fmt.Sprintf(`{
+			"candidates": [{
+				"content": {
+					"parts": [{
+						"text": "{\"items\":[{\"id\":%d,\"translations_lt\":[\"glaustas\",\"trumpas\"]}]}"
+					}]
+				}
+			}]
+		}`, lexemeID))
+	}))
+	defer geminiStub.Close()
+
+	tr, err := translate.New(translate.Config{
+		Provider:      "gemini",
+		GeminiAPIKey:  "stub-key",
+		GeminiModel:   "gemini-3.5-flash-lite",
+		GeminiBaseURL: geminiStub.URL,
+		HTTPClient:    geminiStub.Client(),
+	})
+	if err != nil {
+		t.Fatalf("translate.New: %v", err)
+	}
+
+	handler := server.NewHandler(store, nil, server.WithTranslator(tr))
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp, err := http.Post(fmt.Sprintf("%s/api/lexemes/%d/translate", ts.URL, lexemeID), "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /api/lexemes/%d/translate: %v", lexemeID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 OK, got %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result struct {
+		FetchedTranslationsLT []string       `json:"fetched_translations_lt"`
+		Lexeme                db.LexemeEntry `json:"lexeme"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if len(result.FetchedTranslationsLT) != 2 || result.FetchedTranslationsLT[0] != "glaustas" || result.FetchedTranslationsLT[1] != "trumpas" {
+		t.Errorf("expected fetched_translations_lt [glaustas, trumpas], got %v", result.FetchedTranslationsLT)
+	}
+	if len(result.Lexeme.TranslationsLT) != 3 ||
+		result.Lexeme.TranslationsLT[0] != "lakoniškas" ||
+		result.Lexeme.TranslationsLT[1] != "glaustas" ||
+		result.Lexeme.TranslationsLT[2] != "trumpas" {
+		t.Errorf("expected resolved lexeme.translations_lt [lakoniškas, glaustas, trumpas], got %v", result.Lexeme.TranslationsLT)
+	}
+	if !strings.Contains(geminiReqBody, "laconic (adj.)") || !strings.Contains(geminiReqBody, "Brief and to the point") {
+		t.Errorf("expected translator request to include prompt_form and full_definition, got %s", geminiReqBody)
+	}
+
+	// Verify lexeme_sources rows in database
+	sources, err := store.GetLexemeSources(lexemeID)
+	if err != nil {
+		t.Fatalf("GetLexemeSources: %v", err)
+	}
+	if len(sources["online"].TranslationsLT) != 2 || sources["online"].TranslationsLT[0] != "glaustas" || sources["online"].TranslationsLT[1] != "trumpas" {
+		t.Errorf("expected online source to have [glaustas, trumpas], got %+v", sources["online"])
+	}
+	if len(sources["offline"].TranslationsLT) != 1 || sources["offline"].TranslationsLT[0] != "lakoniškas" {
+		t.Errorf("expected offline source untouched [lakoniškas], got %+v", sources["offline"])
+	}
+
+	// Verify 404 on unknown lexeme ID
+	notFoundResp, err := http.Post(fmt.Sprintf("%s/api/lexemes/99999/translate", ts.URL), "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /api/lexemes/99999/translate: %v", err)
+	}
+	notFoundResp.Body.Close()
+	if notFoundResp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 for unknown lexeme translate, got %d", notFoundResp.StatusCode)
+	}
+}
+
 
 
 

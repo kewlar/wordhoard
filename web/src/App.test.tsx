@@ -755,5 +755,72 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     const finishBtn = screen.getByRole('button', { name: /^finish$/i });
     expect(finishBtn).toHaveFocus();
   });
+
+  it('fetches online translations from the Lexeme Edit form, showing a loading spinner while in flight and appending deduplicated translations into the input', async () => {
+    const user = userEvent.setup();
+    window.history.pushState({}, '', '/books/1/vocabulary');
+
+    let resolveTranslate!: (value: { fetched_translations_lt: string[] }) => void;
+    const translateLexeme = vi.fn(
+      () =>
+        new Promise<{ fetched_translations_lt: string[] }>((resolve) => {
+          resolveTranslate = resolve;
+        })
+    );
+
+    const patchLexeme = vi.fn(async (id: number, patch) => ({
+      ...sampleVocabularyPage.items[0]!,
+      id,
+      translations_lt: patch.translations_lt ?? sampleVocabularyPage.items[0]!.translations_lt,
+    }));
+
+    const client: ApiClient = {
+      listBooks: async () => [sampleBook],
+      getBookVocabulary: async () => sampleVocabularyPage,
+      translateLexeme,
+      patchLexeme,
+    };
+
+    render(<App apiClient={client} />);
+
+    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+
+    // Open Edit form for "laconic (adj.)"
+    const editButtons = screen.getAllByRole('button', { name: /^edit$/i });
+    await user.click(editButtons[0]!);
+
+    const translationsInput = screen.getByLabelText(/lithuanian translations/i) as HTMLInputElement;
+    expect(translationsInput.value).toBe('lakoniškas, glaustas');
+
+    // Click "Fetch translations"
+    const fetchBtn = screen.getByRole('button', { name: /fetch translations/i });
+    await user.click(fetchBtn);
+
+    expect(translateLexeme).toHaveBeenCalledWith(101);
+
+    // Loading spinner / status indicator is visible while request is in flight
+    expect(screen.getByRole('status')).toBeInTheDocument();
+
+    // Resolve the translation request with one duplicate ("glaustas") and two new translations ("trumpas", "aiškus")
+    resolveTranslate({
+      fetched_translations_lt: ['glaustas', 'trumpas', 'aiškus'],
+    });
+
+    // Wait for spinner to disappear and input to have deduplicated appended translations
+    await waitFor(() => {
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+    expect(translationsInput.value).toBe('lakoniškas, glaustas, trumpas, aiškus');
+
+    // Save the form and verify patchLexeme receives the combined translations
+    const saveBtn = screen.getByRole('button', { name: /^save$/i });
+    await user.click(saveBtn);
+
+    expect(patchLexeme).toHaveBeenCalledWith(101, {
+      translations_lt: ['lakoniškas', 'glaustas', 'trumpas', 'aiškus'],
+      short_definitions: ['concise', 'terse'],
+      full_definition: '1. Using very few words\n2. Concise to the point of seeming rude',
+    });
+  });
 });
 

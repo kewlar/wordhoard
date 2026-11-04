@@ -84,6 +84,11 @@ export interface LexemePatch {
   translations_lt?: string[];
 }
 
+export interface TranslateLexemeResponse {
+  fetched_translations_lt: string[];
+  lexeme?: LexemeEntry;
+}
+
 export interface ApiClient {
   listBooks(): Promise<BookSummary[]>;
   getBookVocabulary?(bookId: number, query?: VocabularyQuery): Promise<VocabularyPage>;
@@ -91,6 +96,7 @@ export interface ApiClient {
     lexemeId: number,
     patch: LexemePatch
   ): Promise<LexemeEntry | LexemeStatus>;
+  translateLexeme?(lexemeId: number): Promise<TranslateLexemeResponse>;
   startBookQuiz?(bookId: number, size?: number): Promise<QuizSession>;
   recordLexemeAttempt?(
     lexemeId: number,
@@ -149,6 +155,16 @@ export const defaultApiClient: ApiClient = {
       throw new Error(`Failed to update lexeme (${res.status})`);
     }
     return (await res.json()) as LexemeEntry | LexemeStatus;
+  },
+
+  async translateLexeme(lexemeId: number): Promise<TranslateLexemeResponse> {
+    const res = await fetch(`/api/lexemes/${lexemeId}/translate`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to fetch translations (${res.status})`);
+    }
+    return (await res.json()) as TranslateLexemeResponse;
   },
 
   async startBookQuiz(bookId: number, size = 20): Promise<QuizSession> {

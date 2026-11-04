@@ -12,6 +12,7 @@ import (
 	"wordhoard/internal/db"
 	"wordhoard/internal/ingest"
 	"wordhoard/internal/server"
+	"wordhoard/internal/translate"
 )
 
 func main() {
@@ -69,7 +70,12 @@ func runCLI(args []string, out io.Writer) error {
 			spaFS = os.DirFS(*webDir)
 		}
 
-		handler := server.NewHandler(store, spaFS)
+		var opts []server.Option
+		if tr, err := translate.NewFromEnv(); err == nil {
+			opts = append(opts, server.WithTranslator(tr))
+		}
+
+		handler := server.NewHandler(store, spaFS, opts...)
 		fmt.Fprintf(out, "Listening on %s (database: %s)\n", *addr, *dbPath)
 		return http.ListenAndServe(*addr, handler)
 

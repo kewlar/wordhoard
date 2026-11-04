@@ -329,6 +329,7 @@ function parseCommaSeparatedList(raw: string): string[] {
 
 interface LexemeEditFormProps {
   item: Pick<LexemeEntry, 'id' | 'translations_lt' | 'short_definitions' | 'full_definition'>;
+  apiClient?: ApiClient;
   onSave: (fields: {
     translations_lt: string[];
     short_definitions: string[];
@@ -337,7 +338,7 @@ interface LexemeEditFormProps {
   onCancel: () => void;
 }
 
-function LexemeEditForm({ item, onSave, onCancel }: LexemeEditFormProps) {
+function LexemeEditForm({ item, apiClient, onSave, onCancel }: LexemeEditFormProps) {
   const [translationsInput, setTranslationsInput] = useState(
     (item.translations_lt ?? []).join(', ')
   );
@@ -346,6 +347,35 @@ function LexemeEditForm({ item, onSave, onCancel }: LexemeEditFormProps) {
   );
   const [fullDefInput, setFullDefInput] = useState(item.full_definition ?? '');
   const [saving, setSaving] = useState(false);
+  const [fetchingTranslations, setFetchingTranslations] = useState(false);
+
+  const handleFetchTranslations = async () => {
+    const translateFn = apiClient?.translateLexeme ?? defaultApiClient.translateLexeme!;
+    setFetchingTranslations(true);
+    try {
+      const res = await translateFn(item.id);
+      const fetched = res.fetched_translations_lt ?? [];
+      setTranslationsInput((current) => {
+        const existing = parseCommaSeparatedList(current);
+        const seen = new Set(existing.map((s) => s.toLowerCase()));
+        const merged = [...existing];
+        for (const t of fetched) {
+          const trimmed = t.trim();
+          if (!trimmed) {
+            continue;
+          }
+          const lower = trimmed.toLowerCase();
+          if (!seen.has(lower)) {
+            seen.add(lower);
+            merged.push(trimmed);
+          }
+        }
+        return merged.join(', ');
+      });
+    } finally {
+      setFetchingTranslations(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -374,21 +404,68 @@ function LexemeEditForm({ item, onSave, onCancel }: LexemeEditFormProps) {
         gap: '0.65rem',
       }}
     >
-      <label style={{ display: 'grid', gap: '0.25rem', fontSize: '0.88rem', fontWeight: 600 }}>
-        <span>Lithuanian Translations (comma-separated)</span>
-        <input
-          type="text"
-          value={translationsInput}
-          onChange={(e) => setTranslationsInput(e.target.value)}
-          style={{
-            padding: '0.45rem 0.6rem',
-            borderRadius: '4px',
-            border: '1px solid #bbb',
-            fontSize: '0.92rem',
-            fontWeight: 400,
-          }}
-        />
-      </label>
+      <div style={{ display: 'grid', gap: '0.25rem' }}>
+        <label style={{ display: 'grid', gap: '0.25rem', fontSize: '0.88rem', fontWeight: 600 }}>
+          <span>Lithuanian Translations (comma-separated)</span>
+          <input
+            type="text"
+            value={translationsInput}
+            onChange={(e) => setTranslationsInput(e.target.value)}
+            style={{
+              padding: '0.45rem 0.6rem',
+              borderRadius: '4px',
+              border: '1px solid #bbb',
+              fontSize: '0.92rem',
+              fontWeight: 400,
+            }}
+          />
+        </label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem' }}>
+          <button
+            type="button"
+            disabled={fetchingTranslations}
+            onClick={() => void handleFetchTranslations()}
+            style={{
+              padding: '0.3rem 0.7rem',
+              borderRadius: '4px',
+              border: '1px solid #0b57d0',
+              backgroundColor: '#eef4ff',
+              color: '#0b57d0',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              cursor: fetchingTranslations ? 'wait' : 'pointer',
+            }}
+          >
+            Fetch translations
+          </button>
+          {fetchingTranslations && (
+            <span
+              role="status"
+              aria-live="polite"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                fontSize: '0.82rem',
+                color: '#0b57d0',
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  display: 'inline-block',
+                  width: '12px',
+                  height: '12px',
+                  border: '2px solid #b8d0fa',
+                  borderTopColor: '#0b57d0',
+                  borderRadius: '50%',
+                }}
+              />
+              Fetching translations...
+            </span>
+          )}
+        </div>
+      </div>
 
       <label style={{ display: 'grid', gap: '0.25rem', fontSize: '0.88rem', fontWeight: 600 }}>
         <span>Short Definitions (comma-separated)</span>
@@ -851,6 +928,7 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
               {editingLexemeId === item.id && (
                 <LexemeEditForm
                   item={item}
+                  apiClient={apiClient}
                   onSave={(fields) => handleSaveEdit(item, fields)}
                   onCancel={() => setEditingLexemeId(null)}
                 />
@@ -1450,6 +1528,7 @@ function BookQuizView({
                 {editingReveal && (
                   <LexemeEditForm
                     item={currentItem}
+                    apiClient={apiClient}
                     onSave={handleSaveQuizEdit}
                     onCancel={() => {
                       setEditingReveal(false);
