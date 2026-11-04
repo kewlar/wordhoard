@@ -100,7 +100,7 @@ type VocabularyFilter struct {
 	Statuses         []string
 }
 
-type LexemeStatus struct {
+type LexemeProgress struct {
 	ID            int64  `json:"id"`
 	Lemma         string `json:"lemma"`
 	POS           string `json:"pos"`
@@ -761,7 +761,7 @@ func (s *Store) UpsertLexemeSource(
 	shortDefinitions []string,
 	translationsLT []string,
 ) error {
-	if _, err := s.getLexemeStatus(lexemeID); err != nil {
+	if _, err := s.getLexemeProgress(lexemeID); err != nil {
 		return err
 	}
 	if shortDefinitions == nil {
@@ -792,7 +792,7 @@ func (s *Store) UpsertLexemeSource(
 }
 
 func (s *Store) GetLexemeSources(lexemeID int64) (map[string]LexemeSource, error) {
-	if _, err := s.getLexemeStatus(lexemeID); err != nil {
+	if _, err := s.getLexemeProgress(lexemeID); err != nil {
 		return nil, err
 	}
 	rows, err := s.db.Query(`
@@ -1113,8 +1113,8 @@ func (s *Store) PatchLexeme(lexemeID int64, patch LexemePatch) (*LexemeEntry, er
 	return s.GetLexeme(lexemeID)
 }
 
-func (s *Store) getLexemeStatus(lexemeID int64) (*LexemeStatus, error) {
-	var st LexemeStatus
+func (s *Store) getLexemeProgress(lexemeID int64) (*LexemeProgress, error) {
+	var st LexemeProgress
 	err := s.db.QueryRow(`
 		SELECT id, lemma, pos, mastery_level, known, COALESCE(last_quizzed_at, '')
 		FROM lexemes
@@ -1129,8 +1129,8 @@ func (s *Store) getLexemeStatus(lexemeID int64) (*LexemeStatus, error) {
 	return &st, nil
 }
 
-func (s *Store) UpdateLexeme(lexemeID int64, known *bool) (*LexemeStatus, error) {
-	st, err := s.getLexemeStatus(lexemeID)
+func (s *Store) UpdateLexeme(lexemeID int64, known *bool) (*LexemeProgress, error) {
+	st, err := s.getLexemeProgress(lexemeID)
 	if err != nil {
 		return nil, err
 	}
@@ -1146,11 +1146,11 @@ func (s *Store) UpdateLexeme(lexemeID int64, known *bool) (*LexemeStatus, error)
 	); err != nil {
 		return nil, err
 	}
-	return s.getLexemeStatus(lexemeID)
+	return s.getLexemeProgress(lexemeID)
 }
 
-func (s *Store) RecordLexemeAttempt(lexemeID int64, firstAttemptCorrect bool) (*LexemeStatus, error) {
-	st, err := s.getLexemeStatus(lexemeID)
+func (s *Store) RecordLexemeAttempt(lexemeID int64, firstAttemptCorrect bool) (*LexemeProgress, error) {
+	st, err := s.getLexemeProgress(lexemeID)
 	if err != nil {
 		return nil, err
 	}
@@ -1169,7 +1169,7 @@ func (s *Store) RecordLexemeAttempt(lexemeID int64, firstAttemptCorrect bool) (*
 	); err != nil {
 		return nil, err
 	}
-	return s.getLexemeStatus(lexemeID)
+	return s.getLexemeProgress(lexemeID)
 }
 
 func (s *Store) SelectQuizCandidates(bookID int64, size int) (QuizSession, error) {

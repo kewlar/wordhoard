@@ -5,6 +5,7 @@ import {
   type BookSummary,
   type Excerpt,
   type LexemeEntry,
+  type LexemeStatusKey,
   type VocabularyPage,
   type VocabularyQuery,
 } from './api';
@@ -313,7 +314,7 @@ function renderHighlightedExcerpt(ex: Excerpt) {
   return <>{text}</>;
 }
 
-const LEXEME_STATUS_PILLS: Array<{ key: 'unseen' | 'learning' | 'mastered' | 'known'; label: string }> = [
+const LEXEME_STATUS_PILLS: Array<{ key: LexemeStatusKey; label: string }> = [
   { key: 'unseen', label: 'Unseen' },
   { key: 'learning', label: 'Learning' },
   { key: 'mastered', label: 'Mastered' },
@@ -544,7 +545,7 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
   const [page, setPage] = useState(1);
   const [pos, setPos] = useState('');
   const [search, setSearch] = useState('');
-  const [statuses, setStatuses] = useState<Array<'unseen' | 'learning' | 'mastered' | 'known'>>([
+  const [statuses, setStatuses] = useState<Array<LexemeStatusKey>>([
     'unseen',
     'learning',
     'mastered',
@@ -553,7 +554,7 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
   const [expandedContextIds, setExpandedContextIds] = useState<Record<number, boolean>>({});
   const [editingLexemeId, setEditingLexemeId] = useState<number | null>(null);
 
-  const toggleStatus = (key: 'unseen' | 'learning' | 'mastered' | 'known') => {
+  const toggleStatus = (key: LexemeStatusKey) => {
     setStatuses((prev) => {
       const nextSet = new Set(prev);
       if (nextSet.has(key)) {

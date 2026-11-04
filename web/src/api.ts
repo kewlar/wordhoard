@@ -60,10 +60,10 @@ export interface VocabularyQuery {
   pos?: string;
   search?: string;
   includeKnown?: boolean;
-  statuses?: LexemeStatusKey[] | string[];
+  statuses?: LexemeStatusKey[];
 }
 
-export interface LexemeStatus {
+export interface LexemeProgress {
   id: number;
   lemma: string;
   pos: string;
@@ -95,13 +95,13 @@ export interface ApiClient {
   patchLexeme?(
     lexemeId: number,
     patch: LexemePatch
-  ): Promise<LexemeEntry | LexemeStatus>;
+  ): Promise<LexemeEntry | LexemeProgress>;
   translateLexeme?(lexemeId: number): Promise<TranslateLexemeResponse>;
   startBookQuiz?(bookId: number, size?: number): Promise<QuizSession>;
   recordLexemeAttempt?(
     lexemeId: number,
     attempt: { first_attempt_correct: boolean }
-  ): Promise<LexemeStatus>;
+  ): Promise<LexemeProgress>;
 }
 
 export const defaultApiClient: ApiClient = {
@@ -145,7 +145,7 @@ export const defaultApiClient: ApiClient = {
   async patchLexeme(
     lexemeId: number,
     patch: LexemePatch
-  ): Promise<LexemeEntry | LexemeStatus> {
+  ): Promise<LexemeEntry | LexemeProgress> {
     const res = await fetch(`/api/lexemes/${lexemeId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -154,7 +154,7 @@ export const defaultApiClient: ApiClient = {
     if (!res.ok) {
       throw new Error(`Failed to update lexeme (${res.status})`);
     }
-    return (await res.json()) as LexemeEntry | LexemeStatus;
+    return (await res.json()) as LexemeEntry | LexemeProgress;
   },
 
   async translateLexeme(lexemeId: number): Promise<TranslateLexemeResponse> {
@@ -182,7 +182,7 @@ export const defaultApiClient: ApiClient = {
   async recordLexemeAttempt(
     lexemeId: number,
     attempt: { first_attempt_correct: boolean }
-  ): Promise<LexemeStatus> {
+  ): Promise<LexemeProgress> {
     const res = await fetch(`/api/lexemes/${lexemeId}/attempt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -191,7 +191,7 @@ export const defaultApiClient: ApiClient = {
     if (!res.ok) {
       throw new Error(`Failed to record lexeme attempt (${res.status})`);
     }
-    return (await res.json()) as LexemeStatus;
+    return (await res.json()) as LexemeProgress;
   },
 };
 
