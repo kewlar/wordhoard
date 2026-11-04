@@ -12,10 +12,10 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"ebook-vocab/internal/db"
-	"ebook-vocab/internal/dictionary"
-	"ebook-vocab/internal/ingest"
-	"ebook-vocab/internal/server"
+	"wordhoard/internal/db"
+	"wordhoard/internal/dictionary"
+	"wordhoard/internal/ingest"
+	"wordhoard/internal/server"
 )
 
 func createTestEPUB(t *testing.T, dir, filename, title, author string) string {
@@ -86,7 +86,7 @@ func TestGetBooksAndServeSPA(t *testing.T) {
 	}
 
 	spaFS := fstest.MapFS{
-		"index.html":        {Data: []byte("<!doctype html><html><body><div id=\"root\">Ebook Vocab SPA</div></body></html>")},
+		"index.html":        {Data: []byte("<!doctype html><html><body><div id=\"root\">Wordhoard SPA</div></body></html>")},
 		"assets/app.js":     {Data: []byte("console.log('app');")},
 	}
 

@@ -130,7 +130,9 @@ describe('Books List & Book Vocabulary Browser UI', () => {
 
     render(<App apiClient={client} />);
 
+    expect(screen.getByRole('link', { name: 'Wordhoard' })).toBeInTheDocument();
     expect(await screen.findByText(/no books imported yet/i)).toBeInTheDocument();
+    expect(screen.getByText('wordhoard ingest <pattern>')).toBeInTheDocument();
   });
 
   it('navigates from Books List to Book Vocabulary Browser and displays lexeme details and score breakdown', async () => {

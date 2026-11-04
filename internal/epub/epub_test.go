@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ebook-vocab/internal/epub"
+	"wordhoard/internal/epub"
 )
 
 func createTestEPUB(t *testing.T, dir, filename, title, author string) string {

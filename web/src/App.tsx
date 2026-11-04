@@ -116,7 +116,7 @@ export function App({
             }}
             style={{ color: 'inherit', textDecoration: 'none' }}
           >
-            Ebook Vocabulary
+            Wordhoard
           </a>
         </h1>
         <p style={{ margin: '0.5rem 0 0', color: '#555' }}>
@@ -192,7 +192,7 @@ function BooksListView({ apiClient, onNavigate }: BooksListViewProps) {
       {error && <p role="alert">Error: {error}</p>}
 
       {!loading && !error && books.length === 0 && (
-        <p>No books imported yet. Run <code>ebook-vocab ingest &lt;pattern&gt;</code> in your terminal.</p>
+        <p>No books imported yet. Run <code>wordhoard ingest &lt;pattern&gt;</code> in your terminal.</p>
       )}
 
       {!loading && !error && books.length > 0 && (

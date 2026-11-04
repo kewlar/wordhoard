@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"ebook-vocab/internal/db"
+	"wordhoard/internal/db"
 )
 
 type Server struct {
@@ -210,7 +210,7 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.spaFS == nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.WriteString(w, "<!doctype html><html><body><div id=\"root\">Ebook Vocabulary</div></body></html>")
+		_, _ = io.WriteString(w, "<!doctype html><html><body><div id=\"root\">Wordhoard</div></body></html>")
 		return
 	}
 

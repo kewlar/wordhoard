@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"os"
 
-	"ebook-vocab/internal/db"
-	"ebook-vocab/internal/ingest"
-	"ebook-vocab/internal/server"
+	"wordhoard/internal/db"
+	"wordhoard/internal/ingest"
+	"wordhoard/internal/server"
 )
 
 func main() {
@@ -23,7 +23,7 @@ func main() {
 
 func runCLI(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: ebook-vocab <ingest|serve> [options]")
+		return errors.New("usage: wordhoard <ingest|serve> [options]")
 	}
 
 	subcmd := args[0]
@@ -31,13 +31,13 @@ func runCLI(args []string, out io.Writer) error {
 	case "ingest":
 		fs := flag.NewFlagSet("ingest", flag.ContinueOnError)
 		fs.SetOutput(out)
-		dbPath := fs.String("db", "ebook-vocab.db", "path to SQLite database")
+		dbPath := fs.String("db", "wordhoard.db", "path to SQLite database")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		patterns := fs.Args()
 		if len(patterns) == 0 {
-			return errors.New("usage: ebook-vocab ingest [-db path] <pattern...>")
+			return errors.New("usage: wordhoard ingest [-db path] <pattern...>")
 		}
 		store, err := db.Open(*dbPath)
 		if err != nil {
@@ -51,7 +51,7 @@ func runCLI(args []string, out io.Writer) error {
 	case "serve":
 		fsFlags := flag.NewFlagSet("serve", flag.ContinueOnError)
 		fsFlags.SetOutput(out)
-		dbPath := fsFlags.String("db", "ebook-vocab.db", "path to SQLite database")
+		dbPath := fsFlags.String("db", "wordhoard.db", "path to SQLite database")
 		addr := fsFlags.String("addr", ":8080", "HTTP listen address")
 		webDir := fsFlags.String("web", "web/dist", "path to built frontend assets")
 		if err := fsFlags.Parse(args[1:]); err != nil {

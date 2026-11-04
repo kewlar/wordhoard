@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ebook-vocab/internal/db"
+	"wordhoard/internal/db"
 )
 
 func TestOpenConfiguresWALAndBusyTimeout(t *testing.T) {
