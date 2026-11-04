@@ -313,6 +313,13 @@ function renderHighlightedExcerpt(ex: Excerpt) {
   return <>{text}</>;
 }
 
+const LEXEME_STATUS_PILLS: Array<{ key: 'unseen' | 'learning' | 'mastered' | 'known'; label: string }> = [
+  { key: 'unseen', label: 'Unseen' },
+  { key: 'learning', label: 'Learning' },
+  { key: 'mastered', label: 'Mastered' },
+  { key: 'known', label: 'Known' },
+];
+
 function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyViewProps) {
   const [pageData, setPageData] = useState<VocabularyPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -320,9 +327,26 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
   const [page, setPage] = useState(1);
   const [pos, setPos] = useState('');
   const [search, setSearch] = useState('');
-  const [includeKnown, setIncludeKnown] = useState(false);
+  const [statuses, setStatuses] = useState<Array<'unseen' | 'learning' | 'mastered' | 'known'>>([
+    'unseen',
+    'learning',
+    'mastered',
+  ]);
   const [refreshTick, setRefreshTick] = useState(0);
   const [expandedContextIds, setExpandedContextIds] = useState<Record<number, boolean>>({});
+
+  const toggleStatus = (key: 'unseen' | 'learning' | 'mastered' | 'known') => {
+    setStatuses((prev) => {
+      const nextSet = new Set(prev);
+      if (nextSet.has(key)) {
+        nextSet.delete(key);
+      } else {
+        nextSet.add(key);
+      }
+      return LEXEME_STATUS_PILLS.map((p) => p.key).filter((k) => nextSet.has(k));
+    });
+    setPage(1);
+  };
 
   const toggleContext = (id: number) => {
     setExpandedContextIds((prev) => ({
@@ -340,10 +364,8 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
       pageSize: 50,
       pos,
       search,
+      statuses,
     };
-    if (includeKnown) {
-      query.includeKnown = true;
-    }
     fetchVocab(bookId, query)
       .then((res) => {
         if (!cancelled) {
@@ -364,7 +386,7 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
     return () => {
       cancelled = true;
     };
-  }, [apiClient, bookId, page, pos, search, includeKnown, refreshTick]);
+  }, [apiClient, bookId, page, pos, search, statuses, refreshTick]);
 
   const handleToggleKnown = async (item: LexemeEntry) => {
     const patchFn = apiClient.patchLexeme ?? defaultApiClient.patchLexeme!;
@@ -470,17 +492,32 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
           </select>
         </label>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={includeKnown}
-            onChange={(e) => {
-              setIncludeKnown(e.target.checked);
-              setPage(1);
-            }}
-          />
-          <span>Show known lexemes</span>
-        </label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+          <span>Status:</span>
+          {LEXEME_STATUS_PILLS.map((pill) => {
+            const active = statuses.includes(pill.key);
+            return (
+              <button
+                key={pill.key}
+                type="button"
+                aria-pressed={active}
+                onClick={() => toggleStatus(pill.key)}
+                style={{
+                  padding: '0.3rem 0.65rem',
+                  borderRadius: '999px',
+                  border: active ? '1px solid #0b57d0' : '1px solid #ccc',
+                  backgroundColor: active ? '#e8f0fe' : '#fff',
+                  color: active ? '#0b57d0' : '#444',
+                  fontSize: '0.85rem',
+                  fontWeight: active ? 600 : 400,
+                  cursor: 'pointer',
+                }}
+              >
+                {pill.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {loading && <p>Loading vocabulary...</p>}

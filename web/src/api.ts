@@ -52,12 +52,15 @@ export interface VocabularyPage {
   total_pages: number;
 }
 
+export type LexemeStatusKey = 'unseen' | 'learning' | 'mastered' | 'known';
+
 export interface VocabularyQuery {
   page?: number;
   pageSize?: number;
   pos?: string;
   search?: string;
   includeKnown?: boolean;
+  statuses?: LexemeStatusKey[] | string[];
 }
 
 export interface LexemeStatus {
@@ -112,7 +115,9 @@ export const defaultApiClient: ApiClient = {
     if (query.search) {
       params.set('search', query.search);
     }
-    if (query.includeKnown) {
+    if (query.statuses !== undefined) {
+      params.set('statuses', query.statuses.join(','));
+    } else if (query.includeKnown) {
       params.set('include_known', 'true');
     }
     const qs = params.toString();

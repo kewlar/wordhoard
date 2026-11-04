@@ -91,11 +91,13 @@ type LexemeEntry struct {
 }
 
 type VocabularyFilter struct {
-	Page         int
-	PageSize     int
-	POS          string
-	Search       string
-	IncludeKnown bool
+	Page             int
+	PageSize         int
+	POS              string
+	Search           string
+	IncludeKnown     bool
+	StatusesProvided bool
+	Statuses         []string
 }
 
 type LexemeStatus struct {
@@ -619,7 +621,32 @@ func (s *Store) ListBookVocabulary(bookID int64, filter VocabularyFilter) (Vocab
 	whereClauses = append(whereClauses, "bl.book_id = ?")
 	args = append(args, bookID)
 
-	if !filter.IncludeKnown {
+	if filter.StatusesProvided {
+		var statusClauses []string
+		for _, rawStatus := range filter.Statuses {
+			switch strings.ToLower(strings.TrimSpace(rawStatus)) {
+			case "unseen":
+				statusClauses = append(statusClauses, "(l.known = 0 AND l.mastery_level = 0)")
+			case "learning":
+				statusClauses = append(statusClauses, "(l.known = 0 AND l.mastery_level BETWEEN 1 AND 4)")
+			case "mastered":
+				statusClauses = append(statusClauses, "(l.known = 0 AND l.mastery_level >= 5)")
+			case "known":
+				statusClauses = append(statusClauses, "(l.known = 1)")
+			}
+		}
+		if len(statusClauses) == 0 {
+			return VocabularyPage{
+				Book:       book,
+				Items:      []LexemeEntry{},
+				Total:      0,
+				Page:       page,
+				PageSize:   pageSize,
+				TotalPages: 0,
+			}, nil
+		}
+		whereClauses = append(whereClauses, "("+strings.Join(statusClauses, " OR ")+")")
+	} else if !filter.IncludeKnown {
 		whereClauses = append(whereClauses, "l.known = 0")
 	}
 

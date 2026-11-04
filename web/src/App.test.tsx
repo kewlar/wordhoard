@@ -154,6 +154,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
       pageSize: 50,
       pos: '',
       search: '',
+      statuses: ['unseen', 'learning', 'mastered'],
     });
 
     // Prompt forms & POS
@@ -307,7 +308,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(screen.queryByText('Chapter 3')).not.toBeInTheDocument();
   });
 
-  it('supports toggling global Known Status on a lexeme and filtering known lexemes in Book Vocabulary Browser', async () => {
+  it('supports toggling global Known Status on a lexeme and filtering by Lexeme Status pills in Book Vocabulary Browser', async () => {
     const user = userEvent.setup();
     window.history.pushState({}, '', '/books/1/vocabulary');
 
@@ -320,13 +321,21 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     }));
 
     const getBookVocabulary = vi.fn(async (_bookId: number, query) => {
-      if (query?.includeKnown) {
+      if (query?.statuses?.includes('known')) {
         return {
           ...sampleVocabularyPage,
           items: [
             { ...sampleVocabularyPage.items[0]!, known: true },
             sampleVocabularyPage.items[1]!,
           ],
+        };
+      }
+      if (query?.statuses && query.statuses.length === 0) {
+        return {
+          ...sampleVocabularyPage,
+          total: 0,
+          total_pages: 0,
+          items: [],
         };
       }
       return sampleVocabularyPage;
@@ -343,22 +352,59 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
     expect(screen.getAllByText(/mastery:\s*0\s*\/\s*5/i).length).toBeGreaterThanOrEqual(1);
 
+    // Verify 4 status pills render with Unseen, Learning, Mastered active by default and Known inactive
+    const unseenPill = screen.getByRole('button', { name: /^unseen$/i });
+    const learningPill = screen.getByRole('button', { name: /^learning$/i });
+    const masteredPill = screen.getByRole('button', { name: /^mastered$/i });
+    const knownPill = screen.getByRole('button', { name: /^known$/i });
+
+    expect(unseenPill).toHaveAttribute('aria-pressed', 'true');
+    expect(learningPill).toHaveAttribute('aria-pressed', 'true');
+    expect(masteredPill).toHaveAttribute('aria-pressed', 'true');
+    expect(knownPill).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByRole('checkbox', { name: /show known/i })).not.toBeInTheDocument();
+
     // Click "Already Known / Ignore" on first item
     const knownButtons = screen.getAllByRole('button', { name: /already known/i });
     await user.click(knownButtons[0]!);
 
     expect(patchLexeme).toHaveBeenCalledWith(101, { known: true });
 
-    // Toggle "Show known lexemes" filter
-    const showKnownCheckbox = screen.getByRole('checkbox', { name: /show known/i });
-    await user.click(showKnownCheckbox);
+    // Toggle "Known" pill ON
+    await user.click(knownPill);
+    expect(knownPill).toHaveAttribute('aria-pressed', 'true');
 
     await waitFor(() => {
       expect(getBookVocabulary).toHaveBeenLastCalledWith(
         1,
-        expect.objectContaining({ includeKnown: true, page: 1 })
+        expect.objectContaining({
+          statuses: ['unseen', 'learning', 'mastered', 'known'],
+          page: 1,
+        })
       );
     });
+
+    // Toggle "Unseen", "Learning", "Mastered", and "Known" OFF -> empty statuses array
+    await user.click(unseenPill);
+    await user.click(learningPill);
+    await user.click(masteredPill);
+    await user.click(knownPill);
+
+    expect(unseenPill).toHaveAttribute('aria-pressed', 'false');
+    expect(learningPill).toHaveAttribute('aria-pressed', 'false');
+    expect(masteredPill).toHaveAttribute('aria-pressed', 'false');
+    expect(knownPill).toHaveAttribute('aria-pressed', 'false');
+
+    await waitFor(() => {
+      expect(getBookVocabulary).toHaveBeenLastCalledWith(
+        1,
+        expect.objectContaining({
+          statuses: [],
+          page: 1,
+        })
+      );
+    });
+    expect(await screen.findByText(/no matching lexemes found/i)).toBeInTheDocument();
   });
 
   it('completes a full keyboard-first Book Quiz with answer normalization, queue re-cycling, and single first-attempt mastery calls', async () => {

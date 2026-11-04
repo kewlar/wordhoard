@@ -647,6 +647,76 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		}
 	}
 
+	// Set conundrum to learning (mastery_level = 2) so Book 1 has:
+	// - laconic: mastered (mastery_level = 5, known = false)
+	// - conundrum: learning (mastery_level = 2, known = false)
+	// - ephemeral: known (mastery_level = 0, known = true)
+	for i := 0; i < 2; i++ {
+		resp, err := http.Post(
+			fmt.Sprintf("%s/api/lexemes/%d/attempt", ts.URL, conundrumID),
+			"application/json",
+			strings.NewReader(`{"first_attempt_correct":true}`),
+		)
+		if err != nil {
+			t.Fatalf("POST attempt true for conundrum: %v", err)
+		}
+		resp.Body.Close()
+	}
+
+	assertVocabLemmas := func(query string, wantLemmas []string) {
+		t.Helper()
+		u := ts.URL + "/api/books/1/vocabulary"
+		if query != "" {
+			u += "?" + query
+		}
+		r, err := http.Get(u)
+		if err != nil {
+			t.Fatalf("GET %s: %v", u, err)
+		}
+		defer r.Body.Close()
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: expected 200, got %d", u, r.StatusCode)
+		}
+		var p db.VocabularyPage
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			t.Fatalf("decode %s: %v", u, err)
+		}
+		if p.Total != len(wantLemmas) || len(p.Items) != len(wantLemmas) {
+			t.Fatalf("GET %s: expected %d items %v, got total=%d items=%+v", u, len(wantLemmas), wantLemmas, p.Total, p.Items)
+		}
+		for i, want := range wantLemmas {
+			if p.Items[i].Lemma != want {
+				t.Errorf("GET %s: item[%d].Lemma = %q, want %q", u, i, p.Items[i].Lemma, want)
+			}
+		}
+	}
+
+	// Default (omitted statuses) -> unseen,learning,mastered -> [laconic (mastered), conundrum (learning)]
+	assertVocabLemmas("", []string{"laconic", "conundrum"})
+	// Explicit empty statuses= -> 0 items
+	assertVocabLemmas("statuses=", []string{})
+	// Individual status filters
+	assertVocabLemmas("statuses=unseen", []string{})
+	assertVocabLemmas("statuses=learning", []string{"conundrum"})
+	assertVocabLemmas("statuses=mastered", []string{"laconic"})
+	assertVocabLemmas("statuses=known", []string{"ephemeral"})
+	// Combined status filters
+	assertVocabLemmas("statuses=learning,known", []string{"conundrum", "ephemeral"})
+	assertVocabLemmas("statuses=unseen,learning,mastered,known", []string{"laconic", "conundrum", "ephemeral"})
+
+	// Reset conundrum back to unseen (mastery_level = 0) and verify statuses=unseen returns conundrum
+	resetConundrumResp, err := http.Post(
+		fmt.Sprintf("%s/api/lexemes/%d/attempt", ts.URL, conundrumID),
+		"application/json",
+		strings.NewReader(`{"first_attempt_correct":false}`),
+	)
+	if err != nil {
+		t.Fatalf("POST reset conundrum: %v", err)
+	}
+	resetConundrumResp.Body.Close()
+	assertVocabLemmas("statuses=unseen", []string{"conundrum"})
+	assertVocabLemmas("statuses=unseen,mastered", []string{"laconic", "conundrum"})
+
 	// Now laconic is mastered (5) globally: Book 2 has only 'laconic' (mastered=5) and 'ephemeral' (known=true),
 	// so POST /api/books/2/quiz returns 0 unmastered items, and Book 2 has mastered_count=1, known_count=1!
 	book2QuizResp, err := http.Post(ts.URL+"/api/books/2/quiz", "application/json", nil)
