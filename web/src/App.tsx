@@ -1174,7 +1174,7 @@ function BookQuizView({
         setWasFirstAttemptOnReveal(false);
         const recordAttempt =
           apiClient.recordLexemeAttempt ?? defaultApiClient.recordLexemeAttempt!;
-        void recordAttempt(currentItem.id, { first_attempt_correct: true });
+        void recordAttempt(currentItem.id, { first_attempt_correct: true, correction: true });
       }
     }
 

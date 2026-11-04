@@ -221,13 +221,16 @@ func (s *Server) handlePostLexemeAttempt(w http.ResponseWriter, r *http.Request)
 
 	var body struct {
 		FirstAttemptCorrect *bool `json:"first_attempt_correct"`
+		// Correction replaces the lexeme's last first-attempt transition
+		// (e.g. after an edit makes a wrong quiz answer correct).
+		Correction bool `json:"correction"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.FirstAttemptCorrect == nil {
 		writeJSONError(w, http.StatusBadRequest, "first_attempt_correct is required")
 		return
 	}
 
-	updated, err := s.store.RecordLexemeAttempt(id, *body.FirstAttemptCorrect)
+	updated, err := s.store.RecordLexemeAttempt(id, *body.FirstAttemptCorrect, body.Correction)
 	if errors.Is(err, db.ErrLexemeNotFound) {
 		writeJSONError(w, http.StatusNotFound, "lexeme not found")
 		return

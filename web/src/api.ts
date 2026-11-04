@@ -72,6 +72,12 @@ export interface LexemeProgress {
   last_quizzed_at?: string;
 }
 
+export interface LexemeAttempt {
+  first_attempt_correct: boolean;
+  /** Replaces the last first-attempt transition, computing from the pre-attempt Mastery Level. */
+  correction?: boolean;
+}
+
 export interface QuizSession {
   book?: BookSummary;
   items: LexemeEntry[];
@@ -100,7 +106,7 @@ export interface ApiClient {
   startBookQuiz?(bookId: number, size?: number): Promise<QuizSession>;
   recordLexemeAttempt?(
     lexemeId: number,
-    attempt: { first_attempt_correct: boolean }
+    attempt: LexemeAttempt
   ): Promise<LexemeProgress>;
 }
 
@@ -181,7 +187,7 @@ export const defaultApiClient: ApiClient = {
 
   async recordLexemeAttempt(
     lexemeId: number,
-    attempt: { first_attempt_correct: boolean }
+    attempt: LexemeAttempt
   ): Promise<LexemeProgress> {
     const res = await fetch(`/api/lexemes/${lexemeId}/attempt`, {
       method: 'POST',

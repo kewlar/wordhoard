@@ -203,6 +203,7 @@ CREATE TABLE IF NOT EXISTS lexemes (
 	mastery_level INTEGER NOT NULL DEFAULT 0,
 	known BOOLEAN NOT NULL DEFAULT 0,
 	last_quizzed_at DATETIME,
+	pre_attempt_mastery_level INTEGER,
 	UNIQUE(lemma, pos)
 );
 
@@ -239,7 +240,25 @@ CREATE TABLE IF NOT EXISTS lexeme_sources (
 	PRIMARY KEY (lexeme_id, source)
 );
 `
-	_, err := s.db.Exec(schema)
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	return s.addColumnIfMissing("lexemes", "pre_attempt_mastery_level", "INTEGER")
+}
+
+// addColumnIfMissing upgrades databases created before a column was added to
+// the CREATE TABLE schema.
+func (s *Store) addColumnIfMissing(table, column, decl string) error {
+	var count int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column,
+	).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	_, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, decl))
 	return err
 }
 
@@ -1149,23 +1168,38 @@ func (s *Store) UpdateLexeme(lexemeID int64, known *bool) (*LexemeProgress, erro
 	return s.getLexemeProgress(lexemeID)
 }
 
-func (s *Store) RecordLexemeAttempt(lexemeID int64, firstAttemptCorrect bool) (*LexemeProgress, error) {
+// RecordLexemeAttempt commits the Mastery Level transition for a first
+// attempt: +1 (capped at 5) when correct, reset to 0 otherwise. The level
+// before the transition is remembered so that a later correction (the user
+// edits the lexeme on the reveal card and the wrong answer now matches) can
+// replace the transition with pre-attempt level +1 instead of 0 + 1.
+func (s *Store) RecordLexemeAttempt(lexemeID int64, firstAttemptCorrect, correction bool) (*LexemeProgress, error) {
 	st, err := s.getLexemeProgress(lexemeID)
 	if err != nil {
 		return nil, err
 	}
 
-	newMastery := 0
-	if firstAttemptCorrect {
-		newMastery = st.MasteryLevel + 1
-		if newMastery > 5 {
-			newMastery = 5
+	baseLevel := st.MasteryLevel
+	if correction {
+		var pre sql.NullInt64
+		if err := s.db.QueryRow(
+			`SELECT pre_attempt_mastery_level FROM lexemes WHERE id = ?`, lexemeID,
+		).Scan(&pre); err != nil {
+			return nil, err
+		}
+		if pre.Valid {
+			baseLevel = int(pre.Int64)
 		}
 	}
 
+	newMastery := 0
+	if firstAttemptCorrect {
+		newMastery = min(baseLevel+1, 5)
+	}
+
 	if _, err := s.db.Exec(
-		`UPDATE lexemes SET mastery_level = ?, last_quizzed_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		newMastery, lexemeID,
+		`UPDATE lexemes SET mastery_level = ?, pre_attempt_mastery_level = ?, last_quizzed_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		newMastery, baseLevel, lexemeID,
 	); err != nil {
 		return nil, err
 	}

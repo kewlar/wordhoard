@@ -674,13 +674,25 @@ describe('Books List & Book Vocabulary Browser UI', () => {
       items: sampleVocabularyPage.items,
     }));
 
-    const recordLexemeAttempt = vi.fn(async (id: number, body: { first_attempt_correct: boolean }) => ({
-      id,
-      lemma: id === 101 ? 'laconic' : 'obfuscate',
-      pos: id === 101 ? 'adjective' : 'verb',
-      mastery_level: body.first_attempt_correct ? 1 : 0,
-      known: false,
-    }));
+    // Stateful fake of the attempt endpoint contract: laconic starts at
+    // mastery 3; a correction replaces the last first-attempt transition,
+    // computing from the pre-attempt level.
+    const mastery = new Map<number, number>([[101, 3], [102, 0]]);
+    const preAttempt = new Map<number, number>();
+    const recordLexemeAttempt = vi.fn(
+      async (id: number, body: { first_attempt_correct: boolean; correction?: boolean }) => {
+        const base = body.correction ? preAttempt.get(id) ?? mastery.get(id)! : mastery.get(id)!;
+        preAttempt.set(id, base);
+        mastery.set(id, body.first_attempt_correct ? Math.min(base + 1, 5) : 0);
+        return {
+          id,
+          lemma: id === 101 ? 'laconic' : 'obfuscate',
+          pos: id === 101 ? 'adjective' : 'verb',
+          mastery_level: mastery.get(id)!,
+          known: false,
+        };
+      }
+    );
 
     const patchLexeme = vi.fn(async (id: number, patch) => ({
       ...sampleVocabularyPage.items[0]!,
@@ -733,11 +745,16 @@ describe('Books List & Book Vocabulary Browser UI', () => {
       full_definition: '1. Using very few words\n2. Concise to the point of seeming rude',
     });
 
-    // Reveal card flips to Correct, progress increments to 1 / 2, first-attempt mastery updates (+1 via first_attempt_correct: true), and focus returns to Next
+    // Reveal card flips to Correct, progress increments to 1 / 2, the first attempt is corrected
+    // (pre-attempt mastery 3 + 1 = 4, not 0 + 1), and focus returns to Next
     expect(await screen.findByText(/^correct$/i)).toBeInTheDocument();
     expect(screen.getByText('1 / 2')).toBeInTheDocument();
     expect(recordLexemeAttempt).toHaveBeenCalledTimes(2);
-    expect(recordLexemeAttempt).toHaveBeenLastCalledWith(101, { first_attempt_correct: true });
+    expect(recordLexemeAttempt).toHaveBeenLastCalledWith(101, {
+      first_attempt_correct: true,
+      correction: true,
+    });
+    expect(mastery.get(101)).toBe(4);
 
     const nextBtn = screen.getByRole('button', { name: /^next$/i });
     await waitFor(() => {
