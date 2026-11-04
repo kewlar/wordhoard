@@ -839,5 +839,33 @@ describe('Books List & Book Vocabulary Browser UI', () => {
       full_definition: '1. Using very few words\n2. Concise to the point of seeming rude',
     });
   });
+
+  it('shows an inline error in the Lexeme Edit form when fetching translations fails, keeping the typed translations', async () => {
+    const user = userEvent.setup();
+    window.history.pushState({}, '', '/books/1/vocabulary');
+
+    const translateLexeme = vi.fn(async () => {
+      throw new Error('Failed to fetch translations (502)');
+    });
+
+    const client: ApiClient = {
+      listBooks: async () => [sampleBook],
+      getBookVocabulary: async () => sampleVocabularyPage,
+      translateLexeme,
+    };
+
+    render(<App apiClient={client} />);
+
+    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    await user.click(screen.getAllByRole('button', { name: /^edit$/i })[0]!);
+
+    const translationsInput = screen.getByLabelText(/lithuanian translations/i) as HTMLInputElement;
+    await user.click(screen.getByRole('button', { name: /fetch translations/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to fetch translations (502)');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(translationsInput.value).toBe('lakoniškas, glaustas');
+    expect(screen.getByRole('button', { name: /fetch translations/i })).toBeEnabled();
+  });
 });
 

@@ -349,10 +349,12 @@ function LexemeEditForm({ item, apiClient, onSave, onCancel }: LexemeEditFormPro
   const [fullDefInput, setFullDefInput] = useState(item.full_definition ?? '');
   const [saving, setSaving] = useState(false);
   const [fetchingTranslations, setFetchingTranslations] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const handleFetchTranslations = async () => {
     const translateFn = apiClient?.translateLexeme ?? defaultApiClient.translateLexeme!;
     setFetchingTranslations(true);
+    setFetchError(null);
     try {
       const res = await translateFn(item.id);
       const fetched = res.fetched_translations_lt ?? [];
@@ -373,6 +375,8 @@ function LexemeEditForm({ item, apiClient, onSave, onCancel }: LexemeEditFormPro
         }
         return merged.join(', ');
       });
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : 'Failed to fetch translations');
     } finally {
       setFetchingTranslations(false);
     }
@@ -463,6 +467,11 @@ function LexemeEditForm({ item, apiClient, onSave, onCancel }: LexemeEditFormPro
                 }}
               />
               Fetching translations...
+            </span>
+          )}
+          {fetchError && (
+            <span role="alert" style={{ fontSize: '0.82rem', color: '#b3261e' }}>
+              {fetchError}
             </span>
           )}
         </div>
