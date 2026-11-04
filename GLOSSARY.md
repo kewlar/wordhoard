@@ -1,4 +1,4 @@
-# Ebook Vocabulary
+# Wordhoard
 
 A personal vocabulary explorer and trainer that extracts uncommon English words from EPUB books before reading, provides definitions, Lithuanian translations, and book excerpts, and quizzes the reader until mastered.
 
@@ -27,22 +27,25 @@ A self-contained paragraph (or bounded multi-sentence snippet) from a **Book** s
 **Core Vocabulary**:
 Common English **Lexemes** (CEFR A1–B2 words and closed-class function words) that the user is assumed to already know and which are excluded from a book's learnable vocabulary list by default.
 
-### Meaning & Translation
+### Meaning, Translation & Sources
 
 **Sense**:
 A distinct meaning of a **Lexeme** within its Part of Speech. A **Lexeme** aggregates its top dictionary senses so that its **Full Definition** displays numbered senses and its accepted **Short Definitions** and **Translations** are the union across those senses.
 
 **Full Definition**:
-The comprehensive English explanation of a **Lexeme** (listing its top **Senses**), displayed when browsing vocabulary or after revealing the answer in a quiz.
+The comprehensive English explanation of a **Lexeme** (listing its top **Senses**), displayed when browsing vocabulary or after revealing the answer in a quiz, and editable by the user.
 
 **Short Definition**:
-One or more concise English synonyms or glosses for a **Lexeme** (e.g., `"concise"`, `"terse"` for *laconic*) that are accepted as valid exact answers (after normalizing case, whitespace, punctuation, and stripping optional leading `"to "` or `"a/an "`) during a **Quiz**.
+One or more concise English synonyms or glosses for a **Lexeme** (e.g., `"concise"`, `"terse"` for *laconic*) that are accepted as valid exact answers (after normalizing case, whitespace, punctuation, and stripping optional leading `"to "` or `"a/an "`) during a **Quiz**, and editable by the user.
 _Avoid_: Synonym, keyword, hint
 
 **Translation**:
-One or more Lithuanian (`lt`) equivalents for a **Lexeme** that are displayed in the vocabulary view and accepted as valid exact answers (after normalizing case, whitespace, and punctuation) during a **Quiz**.
+One or more Lithuanian (`lt`) equivalents for a **Lexeme** that are displayed in the vocabulary view, accepted as valid exact answers (after normalizing case, whitespace, and punctuation) during a **Quiz**, enrichable from online translation providers, and editable by the user.
 
-### Scoring & Learning
+**Lexeme Source**:
+The origin tier (`offline`, `online`, or `user`) of a **Lexeme**'s definitions and translations stored in the database. When a `user` entry exists for a lexeme, the UI displays the `user` values; otherwise it combines `offline` and `online` entries without overwriting original source data.
+
+### Scoring, Status & Learning
 
 **Obscurity Score**:
 A compound metric assigned to each **Lexeme** within a **Book**, combining its global rarity in English with its library-wide inverse document frequency and its occurrence count in the book. Used to order a book's vocabulary list from most obscure to most common.
@@ -52,6 +55,13 @@ A global, per-**Lexeme** integer level (`0..5`) tracking how well the user knows
 
 **Known Status**:
 A manual override on a **Lexeme** indicating the user already knows (or wants to ignore) it, excluding it from future quizzes across all books.
+
+**Lexeme Status**:
+One of four mutually exclusive learning states derived from **Known Status** and **Mastery Level** used for filtering in the vocabulary browser:
+- **Unseen**: `known = false` and `mastery_level = 0`
+- **Learning**: `known = false` and `mastery_level` in `1..4`
+- **Mastered**: `known = false` and `mastery_level = 5`
+- **Known**: `known = true`
 
 **Quiz**:
 A keyboard-first interactive training session for a specific **Book** held in frontend state that selects a fixed-size batch (default 20) of unmastered **Lexemes** prioritized by **Mastery Level** and **Obscurity Score**, presenting each **Prompt Form** one at a time. Incorrectly answered lexemes are moved to the back of the session queue and repeated until every selected lexeme has been answered correctly at least once in that session.
