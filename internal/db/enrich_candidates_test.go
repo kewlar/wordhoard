@@ -67,10 +67,10 @@ func TestListEnrichCandidatesSkipsLexemesWithAnyResolvedTranslations(t *testing.
 		{Lemma: "perfidy", POS: "noun", PromptForm: "a perfidy"},
 	})
 
-	if err := store.UpsertLexemeSource(lexemeIDByLemma(t, store, "quixotic"), "online", "", nil, []string{"donkichotiškas"}); err != nil {
+	if err := store.UpsertLexemeSource(lexemeIDByLemma(t, store, "quixotic"), db.SourceOnline, db.SourceContent{TranslationsLT: []string{"donkichotiškas"}}); err != nil {
 		t.Fatalf("upsert online: %v", err)
 	}
-	if err := store.UpsertLexemeSource(lexemeIDByLemma(t, store, "perfidy"), "user", "", nil, []string{"klasta"}); err != nil {
+	if err := store.UpsertLexemeSource(lexemeIDByLemma(t, store, "perfidy"), db.SourceUser, db.SourceContent{TranslationsLT: []string{"klasta"}}); err != nil {
 		t.Fatalf("upsert user: %v", err)
 	}
 

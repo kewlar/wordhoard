@@ -122,9 +122,11 @@ func persistOnline(store *db.Store, lexemeID int64, fetched []string) (bool, err
 	if err != nil {
 		return false, err
 	}
-	online := sources["online"]
+	online := sources[db.SourceOnline]
 	merged := append(append([]string{}, online.TranslationsLT...), clean...)
-	if err := store.UpsertLexemeSource(lexemeID, "online", online.FullDefinition, online.ShortDefinitions, dedupe(merged)); err != nil {
+	content := online.SourceContent
+	content.TranslationsLT = dedupe(merged)
+	if err := store.UpsertLexemeSource(lexemeID, db.SourceOnline, content); err != nil {
 		return false, err
 	}
 	return true, nil

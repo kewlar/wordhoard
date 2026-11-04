@@ -331,13 +331,11 @@ func TestLexemeSourcesResolutionAndPreservation(t *testing.T) {
 	}
 
 	// 2. Add 'online' source -> resolved lexeme combines offline + online (deduplicated union preserving order)
-	err = store.UpsertLexemeSource(
-		lexemeID,
-		"online",
-		"Online definition fallback",
-		[]string{"terse", "pithy"},
-		[]string{"lakoniškas", "glaustas", "trumpas"},
-	)
+	err = store.UpsertLexemeSource(lexemeID, db.SourceOnline, db.SourceContent{
+		FullDefinition:   "Online definition fallback",
+		ShortDefinitions: []string{"terse", "pithy"},
+		TranslationsLT:   []string{"lakoniškas", "glaustas", "trumpas"},
+	})
 	if err != nil {
 		t.Fatalf("UpsertLexemeSource online: %v", err)
 	}

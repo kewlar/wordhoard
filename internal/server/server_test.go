@@ -804,7 +804,7 @@ func TestPatchLexemeSavesUserSourceAndPreservesOfflineOnlineSources(t *testing.T
 	lexemeID := page.Items[0].ID
 
 	// Seed an online source row as well
-	if err := store.UpsertLexemeSource(lexemeID, "online", "", []string{"pithy"}, []string{"glaustas"}); err != nil {
+	if err := store.UpsertLexemeSource(lexemeID, db.SourceOnline, db.SourceContent{ShortDefinitions: []string{"pithy"}, TranslationsLT: []string{"glaustas"}}); err != nil {
 		t.Fatalf("UpsertLexemeSource online: %v", err)
 	}
 

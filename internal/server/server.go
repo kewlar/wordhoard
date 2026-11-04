@@ -294,10 +294,12 @@ func (s *Server) handleTranslateLexeme(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	onlineSrc := sources["online"]
+	onlineSrc := sources[db.SourceOnline]
 	mergedOnlineLT := mergeUniqueStrings(onlineSrc.TranslationsLT, fetched)
 
-	if err := s.store.UpsertLexemeSource(id, "online", onlineSrc.FullDefinition, onlineSrc.ShortDefinitions, mergedOnlineLT); err != nil {
+	content := onlineSrc.SourceContent
+	content.TranslationsLT = mergedOnlineLT
+	if err := s.store.UpsertLexemeSource(id, db.SourceOnline, content); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

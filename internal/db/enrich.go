@@ -1,7 +1,6 @@
 package db
 
 import (
-	"encoding/json"
 	"strings"
 )
 
@@ -33,12 +32,13 @@ func (s *Store) ListEnrichCandidates(filter EnrichFilter) ([]LexemeEntry, error)
 		b.WriteString(` AND bl.book_id = ?`)
 		args = append(args, filter.BookID)
 	}
+	args = append(args, SourceUser)
 	b.WriteString(`
 		)
 		AND NOT EXISTS (
 			SELECT 1 FROM lexeme_sources ls
 			WHERE ls.lexeme_id = l.id
-			AND (ls.source = 'user' OR json_array_length(ls.translations_lt_json) > 0)
+			AND (ls.source = ? OR json_array_length(ls.translations_lt_json) > 0)
 		)
 		AND (
 			EXISTS (SELECT 1 FROM lexeme_sources ls WHERE ls.lexeme_id = l.id)
@@ -64,12 +64,8 @@ func (s *Store) ListEnrichCandidates(filter EnrichFilter) ([]LexemeEntry, error)
 			&e.FullDefinition, &shortJSON, &ltJSON, &e.MasteryLevel, &e.Known); err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal([]byte(shortJSON), &e.ShortDefinitions); err != nil || e.ShortDefinitions == nil {
-			e.ShortDefinitions = []string{}
-		}
-		if err := json.Unmarshal([]byte(ltJSON), &e.TranslationsLT); err != nil || e.TranslationsLT == nil {
-			e.TranslationsLT = []string{}
-		}
+		e.ShortDefinitions = decodeStringList(shortJSON)
+		e.TranslationsLT = decodeStringList(ltJSON)
 		e.Excerpts = []Excerpt{}
 		entries = append(entries, e)
 	}

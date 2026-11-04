@@ -109,12 +109,26 @@ type LexemeProgress struct {
 	LastQuizzedAt string `json:"last_quizzed_at,omitempty"`
 }
 
-type LexemeSource struct {
-	LexemeID         int64    `json:"lexeme_id"`
-	Source           string   `json:"source"`
+// SourceTier is the origin tier of a Lexeme Source (ADR-0001).
+type SourceTier string
+
+const (
+	SourceOffline SourceTier = "offline"
+	SourceOnline  SourceTier = "online"
+	SourceUser    SourceTier = "user"
+)
+
+// SourceContent is the definitions and translations stored per Lexeme Source.
+type SourceContent struct {
 	FullDefinition   string   `json:"full_definition"`
 	ShortDefinitions []string `json:"short_definitions"`
 	TranslationsLT   []string `json:"translations_lt"`
+}
+
+type LexemeSource struct {
+	LexemeID int64      `json:"lexeme_id"`
+	Source   SourceTier `json:"source"`
+	SourceContent
 }
 
 type LexemePatch struct {
@@ -500,36 +514,18 @@ func (s *Store) SaveBookLexemes(bookID int64, items []LexemeInput) error {
 	}
 	defer insertExcerptStmt.Close()
 
-	upsertOfflineSourceStmt, err := tx.Prepare(`
-		INSERT INTO lexeme_sources (
-			lexeme_id, source, full_definition, short_definitions_json, translations_lt_json, updated_at
-		) VALUES (?, 'offline', ?, ?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(lexeme_id, source) DO UPDATE SET
-			full_definition = excluded.full_definition,
-			short_definitions_json = excluded.short_definitions_json,
-			translations_lt_json = excluded.translations_lt_json,
-			updated_at = CURRENT_TIMESTAMP
-	`)
+	upsertOfflineSourceStmt, err := tx.Prepare(upsertLexemeSourceSQL)
 	if err != nil {
 		return err
 	}
 	defer upsertOfflineSourceStmt.Close()
 
 	for _, item := range items {
-		shortDefs := item.ShortDefinitions
-		if shortDefs == nil {
-			shortDefs = []string{}
-		}
-		shortJSON, err := json.Marshal(shortDefs)
+		shortJSON, err := encodeStringList(item.ShortDefinitions)
 		if err != nil {
 			return err
 		}
-
-		transLT := item.TranslationsLT
-		if transLT == nil {
-			transLT = []string{}
-		}
-		ltJSON, err := json.Marshal(transLT)
+		ltJSON, err := encodeStringList(item.TranslationsLT)
 		if err != nil {
 			return err
 		}
@@ -541,8 +537,8 @@ func (s *Store) SaveBookLexemes(bookID int64, items []LexemeInput) error {
 			item.CEFRLevel,
 			item.GlobalZipfFreq,
 			item.FullDefinition,
-			string(shortJSON),
-			string(ltJSON),
+			shortJSON,
+			ltJSON,
 		); err != nil {
 			return err
 		}
@@ -554,9 +550,10 @@ func (s *Store) SaveBookLexemes(bookID int64, items []LexemeInput) error {
 
 		if _, err := upsertOfflineSourceStmt.Exec(
 			lexemeID,
+			SourceOffline,
 			item.FullDefinition,
-			string(shortJSON),
-			string(ltJSON),
+			shortJSON,
+			ltJSON,
 		); err != nil {
 			return err
 		}
@@ -620,12 +617,8 @@ func scanLexemeEntry(scanner rowScanner) (LexemeEntry, error) {
 	); err != nil {
 		return LexemeEntry{}, err
 	}
-	if err := json.Unmarshal([]byte(shortJSON), &entry.ShortDefinitions); err != nil || entry.ShortDefinitions == nil {
-		entry.ShortDefinitions = []string{}
-	}
-	if err := json.Unmarshal([]byte(ltJSON), &entry.TranslationsLT); err != nil || entry.TranslationsLT == nil {
-		entry.TranslationsLT = []string{}
-	}
+	entry.ShortDefinitions = decodeStringList(shortJSON)
+	entry.TranslationsLT = decodeStringList(ltJSON)
 	entry.Excerpts = []Excerpt{}
 	return entry, nil
 }
@@ -685,11 +678,41 @@ func deduplicateStrings(slices ...[]string) []string {
 	return out
 }
 
-func resolveEntryFromSources(entry *LexemeEntry, srcMap map[string]LexemeSource) {
+// decodeStringList decodes a JSON string array column, treating malformed or
+// null values as empty.
+func decodeStringList(raw string) []string {
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil || out == nil {
+		return []string{}
+	}
+	return out
+}
+
+// encodeStringList encodes a string list column, storing nil as `[]`.
+func encodeStringList(list []string) (string, error) {
+	if list == nil {
+		list = []string{}
+	}
+	b, err := json.Marshal(list)
+	return string(b), err
+}
+
+const upsertLexemeSourceSQL = `
+		INSERT INTO lexeme_sources (
+			lexeme_id, source, full_definition, short_definitions_json, translations_lt_json, updated_at
+		) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(lexeme_id, source) DO UPDATE SET
+			full_definition = excluded.full_definition,
+			short_definitions_json = excluded.short_definitions_json,
+			translations_lt_json = excluded.translations_lt_json,
+			updated_at = CURRENT_TIMESTAMP
+	`
+
+func resolveEntryFromSources(entry *LexemeEntry, srcMap map[SourceTier]LexemeSource) {
 	if len(srcMap) == 0 {
 		return
 	}
-	if userSrc, hasUser := srcMap["user"]; hasUser {
+	if userSrc, hasUser := srcMap[SourceUser]; hasUser {
 		entry.FullDefinition = userSrc.FullDefinition
 		if userSrc.ShortDefinitions != nil {
 			entry.ShortDefinitions = append([]string{}, userSrc.ShortDefinitions...)
@@ -704,8 +727,8 @@ func resolveEntryFromSources(entry *LexemeEntry, srcMap map[string]LexemeSource)
 		return
 	}
 
-	offlineSrc, hasOffline := srcMap["offline"]
-	onlineSrc, hasOnline := srcMap["online"]
+	offlineSrc, hasOffline := srcMap[SourceOffline]
+	onlineSrc, hasOnline := srcMap[SourceOnline]
 
 	if hasOffline && strings.TrimSpace(offlineSrc.FullDefinition) != "" {
 		entry.FullDefinition = offlineSrc.FullDefinition
@@ -743,21 +766,17 @@ func (s *Store) attachSources(entries []LexemeEntry) error {
 	}
 	defer rows.Close()
 
-	byLexeme := make(map[int64]map[string]LexemeSource)
+	byLexeme := make(map[int64]map[SourceTier]LexemeSource)
 	for rows.Next() {
 		var src LexemeSource
 		var shortJSON, ltJSON string
 		if err := rows.Scan(&src.LexemeID, &src.Source, &src.FullDefinition, &shortJSON, &ltJSON); err != nil {
 			return err
 		}
-		if err := json.Unmarshal([]byte(shortJSON), &src.ShortDefinitions); err != nil || src.ShortDefinitions == nil {
-			src.ShortDefinitions = []string{}
-		}
-		if err := json.Unmarshal([]byte(ltJSON), &src.TranslationsLT); err != nil || src.TranslationsLT == nil {
-			src.TranslationsLT = []string{}
-		}
+		src.ShortDefinitions = decodeStringList(shortJSON)
+		src.TranslationsLT = decodeStringList(ltJSON)
 		if byLexeme[src.LexemeID] == nil {
-			byLexeme[src.LexemeID] = make(map[string]LexemeSource)
+			byLexeme[src.LexemeID] = make(map[SourceTier]LexemeSource)
 		}
 		byLexeme[src.LexemeID][src.Source] = src
 	}
@@ -773,44 +792,23 @@ func (s *Store) attachSources(entries []LexemeEntry) error {
 	return nil
 }
 
-func (s *Store) UpsertLexemeSource(
-	lexemeID int64,
-	source string,
-	fullDefinition string,
-	shortDefinitions []string,
-	translationsLT []string,
-) error {
+func (s *Store) UpsertLexemeSource(lexemeID int64, source SourceTier, content SourceContent) error {
 	if _, err := s.getLexemeProgress(lexemeID); err != nil {
 		return err
 	}
-	if shortDefinitions == nil {
-		shortDefinitions = []string{}
-	}
-	shortJSON, err := json.Marshal(shortDefinitions)
+	shortJSON, err := encodeStringList(content.ShortDefinitions)
 	if err != nil {
 		return err
 	}
-	if translationsLT == nil {
-		translationsLT = []string{}
-	}
-	ltJSON, err := json.Marshal(translationsLT)
+	ltJSON, err := encodeStringList(content.TranslationsLT)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`
-		INSERT INTO lexeme_sources (
-			lexeme_id, source, full_definition, short_definitions_json, translations_lt_json, updated_at
-		) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(lexeme_id, source) DO UPDATE SET
-			full_definition = excluded.full_definition,
-			short_definitions_json = excluded.short_definitions_json,
-			translations_lt_json = excluded.translations_lt_json,
-			updated_at = CURRENT_TIMESTAMP
-	`, lexemeID, source, fullDefinition, string(shortJSON), string(ltJSON))
+	_, err = s.db.Exec(upsertLexemeSourceSQL, lexemeID, source, content.FullDefinition, shortJSON, ltJSON)
 	return err
 }
 
-func (s *Store) GetLexemeSources(lexemeID int64) (map[string]LexemeSource, error) {
+func (s *Store) GetLexemeSources(lexemeID int64) (map[SourceTier]LexemeSource, error) {
 	if _, err := s.getLexemeProgress(lexemeID); err != nil {
 		return nil, err
 	}
@@ -824,19 +822,15 @@ func (s *Store) GetLexemeSources(lexemeID int64) (map[string]LexemeSource, error
 	}
 	defer rows.Close()
 
-	out := make(map[string]LexemeSource)
+	out := make(map[SourceTier]LexemeSource)
 	for rows.Next() {
 		var src LexemeSource
 		var shortJSON, ltJSON string
 		if err := rows.Scan(&src.LexemeID, &src.Source, &src.FullDefinition, &shortJSON, &ltJSON); err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal([]byte(shortJSON), &src.ShortDefinitions); err != nil || src.ShortDefinitions == nil {
-			src.ShortDefinitions = []string{}
-		}
-		if err := json.Unmarshal([]byte(ltJSON), &src.TranslationsLT); err != nil || src.TranslationsLT == nil {
-			src.TranslationsLT = []string{}
-		}
+		src.ShortDefinitions = decodeStringList(shortJSON)
+		src.TranslationsLT = decodeStringList(ltJSON)
 		out[src.Source] = src
 	}
 	if err := rows.Err(); err != nil {
@@ -1084,12 +1078,8 @@ func (s *Store) GetLexeme(lexemeID int64) (*LexemeEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal([]byte(shortJSON), &entry.ShortDefinitions); err != nil || entry.ShortDefinitions == nil {
-		entry.ShortDefinitions = []string{}
-	}
-	if err := json.Unmarshal([]byte(ltJSON), &entry.TranslationsLT); err != nil || entry.TranslationsLT == nil {
-		entry.TranslationsLT = []string{}
-	}
+	entry.ShortDefinitions = decodeStringList(shortJSON)
+	entry.TranslationsLT = decodeStringList(ltJSON)
 	entry.Excerpts = []Excerpt{}
 
 	entries := []LexemeEntry{entry}
@@ -1124,7 +1114,11 @@ func (s *Store) PatchLexeme(lexemeID int64, patch LexemePatch) (*LexemeEntry, er
 		if patch.TranslationsLT != nil {
 			transLT = *patch.TranslationsLT
 		}
-		if err := s.UpsertLexemeSource(lexemeID, "user", fullDef, shortDefs, transLT); err != nil {
+		if err := s.UpsertLexemeSource(lexemeID, SourceUser, SourceContent{
+			FullDefinition:   fullDef,
+			ShortDefinitions: shortDefs,
+			TranslationsLT:   transLT,
+		}); err != nil {
 			return nil, err
 		}
 	}
