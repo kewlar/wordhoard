@@ -758,4 +758,135 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 	}
 }
 
+func TestPatchLexemeSavesUserSourceAndPreservesOfflineOnlineSources(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer store.Close()
+
+	book, _, err := store.CreateBook(db.BookInput{
+		Title:    "Editable Lexemes Book",
+		Author:   "Author E",
+		Filename: "/books/editable.epub",
+		FileSize: 2048,
+		SHA256:   "sha-editable",
+	})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+
+	err = store.SaveBookLexemes(book.ID, []db.LexemeInput{
+		{
+			Lemma:            "laconic",
+			POS:              "adjective",
+			PromptForm:       "laconic (adj.)",
+			CEFRLevel:        "c1",
+			GlobalZipfFreq:   2.2,
+			FullDefinition:   "1. Brief and to the point",
+			ShortDefinitions: []string{"concise", "terse"},
+			TranslationsLT:   []string{"lakoniškas"},
+			OccurrenceCount:  2,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveBookLexemes: %v", err)
+	}
+
+	page, err := store.ListBookVocabulary(book.ID, db.VocabularyFilter{Page: 1, PageSize: 10})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("ListBookVocabulary: err=%v len=%d", err, len(page.Items))
+	}
+	lexemeID := page.Items[0].ID
+
+	// Seed an online source row as well
+	if err := store.UpsertLexemeSource(lexemeID, "online", "", []string{"pithy"}, []string{"glaustas"}); err != nil {
+		t.Fatalf("UpsertLexemeSource online: %v", err)
+	}
+
+	handler := server.NewHandler(store, nil)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	// Before user edit, GET /api/books/1/vocabulary resolves combined offline + online
+	vocabResp1, err := http.Get(fmt.Sprintf("%s/api/books/%d/vocabulary", ts.URL, book.ID))
+	if err != nil {
+		t.Fatalf("GET vocabulary before edit: %v", err)
+	}
+	var vocabBefore db.VocabularyPage
+	if err := json.NewDecoder(vocabResp1.Body).Decode(&vocabBefore); err != nil {
+		vocabResp1.Body.Close()
+		t.Fatalf("decode vocabBefore: %v", err)
+	}
+	vocabResp1.Body.Close()
+
+	if len(vocabBefore.Items[0].TranslationsLT) != 2 || vocabBefore.Items[0].TranslationsLT[0] != "lakoniškas" || vocabBefore.Items[0].TranslationsLT[1] != "glaustas" {
+		t.Fatalf("expected combined offline+online translations [lakoniškas, glaustas], got %v", vocabBefore.Items[0].TranslationsLT)
+	}
+
+	// PATCH /api/lexemes/:id with user-edited fields
+	patchBody := `{
+		"full_definition": "1. User-customized definition of laconic",
+		"short_definitions": ["succinct", "brief"],
+		"translations_lt": ["trumpas", "glaustas"]
+	}`
+	req, err := http.NewRequest(http.MethodPatch, fmt.Sprintf("%s/api/lexemes/%d", ts.URL, lexemeID), strings.NewReader(patchBody))
+	if err != nil {
+		t.Fatalf("NewRequest PATCH: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	patchResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /api/lexemes/%d: %v", lexemeID, err)
+	}
+	defer patchResp.Body.Close()
+	if patchResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK on PATCH, got %d", patchResp.StatusCode)
+	}
+
+	var updated db.LexemeEntry
+	if err := json.NewDecoder(patchResp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode PATCH response: %v", err)
+	}
+	if updated.ID != lexemeID || updated.Lemma != "laconic" ||
+		updated.FullDefinition != "1. User-customized definition of laconic" ||
+		len(updated.ShortDefinitions) != 2 || updated.ShortDefinitions[0] != "succinct" ||
+		len(updated.TranslationsLT) != 2 || updated.TranslationsLT[0] != "trumpas" {
+		t.Errorf("unexpected updated LexemeEntry from PATCH: %+v", updated)
+	}
+
+	// Verify GET /api/books/1/vocabulary now returns user values
+	vocabResp2, err := http.Get(fmt.Sprintf("%s/api/books/%d/vocabulary", ts.URL, book.ID))
+	if err != nil {
+		t.Fatalf("GET vocabulary after edit: %v", err)
+	}
+	var vocabAfter db.VocabularyPage
+	if err := json.NewDecoder(vocabResp2.Body).Decode(&vocabAfter); err != nil {
+		vocabResp2.Body.Close()
+		t.Fatalf("decode vocabAfter: %v", err)
+	}
+	vocabResp2.Body.Close()
+
+	if vocabAfter.Items[0].FullDefinition != "1. User-customized definition of laconic" ||
+		len(vocabAfter.Items[0].TranslationsLT) != 2 || vocabAfter.Items[0].TranslationsLT[0] != "trumpas" {
+		t.Errorf("expected vocabulary endpoint to return user source values, got %+v", vocabAfter.Items[0])
+	}
+
+	// Verify offline and online rows are preserved untouched
+	sources, err := store.GetLexemeSources(lexemeID)
+	if err != nil {
+		t.Fatalf("GetLexemeSources: %v", err)
+	}
+	if sources["offline"].FullDefinition != "1. Brief and to the point" ||
+		len(sources["offline"].TranslationsLT) != 1 || sources["offline"].TranslationsLT[0] != "lakoniškas" {
+		t.Errorf("expected offline source untouched, got %+v", sources["offline"])
+	}
+	if len(sources["online"].TranslationsLT) != 1 || sources["online"].TranslationsLT[0] != "glaustas" {
+		t.Errorf("expected online source untouched, got %+v", sources["online"])
+	}
+}
+
+
 

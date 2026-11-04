@@ -109,6 +109,21 @@ type LexemeStatus struct {
 	LastQuizzedAt string `json:"last_quizzed_at,omitempty"`
 }
 
+type LexemeSource struct {
+	LexemeID         int64    `json:"lexeme_id"`
+	Source           string   `json:"source"`
+	FullDefinition   string   `json:"full_definition"`
+	ShortDefinitions []string `json:"short_definitions"`
+	TranslationsLT   []string `json:"translations_lt"`
+}
+
+type LexemePatch struct {
+	Known            *bool
+	FullDefinition   *string
+	ShortDefinitions *[]string
+	TranslationsLT   *[]string
+}
+
 type QuizSession struct {
 	Book  *Book         `json:"book"`
 	Items []LexemeEntry `json:"items"`
@@ -213,6 +228,16 @@ CREATE TABLE IF NOT EXISTS excerpts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_excerpts_book_lexeme ON excerpts(book_id, lexeme_id);
+
+CREATE TABLE IF NOT EXISTS lexeme_sources (
+	lexeme_id INTEGER NOT NULL REFERENCES lexemes(id) ON DELETE CASCADE,
+	source TEXT NOT NULL CHECK(source IN ('offline', 'online', 'user')),
+	full_definition TEXT NOT NULL DEFAULT '',
+	short_definitions_json TEXT NOT NULL DEFAULT '[]',
+	translations_lt_json TEXT NOT NULL DEFAULT '[]',
+	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (lexeme_id, source)
+);
 `
 	_, err := s.db.Exec(schema)
 	return err
@@ -456,6 +481,21 @@ func (s *Store) SaveBookLexemes(bookID int64, items []LexemeInput) error {
 	}
 	defer insertExcerptStmt.Close()
 
+	upsertOfflineSourceStmt, err := tx.Prepare(`
+		INSERT INTO lexeme_sources (
+			lexeme_id, source, full_definition, short_definitions_json, translations_lt_json, updated_at
+		) VALUES (?, 'offline', ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(lexeme_id, source) DO UPDATE SET
+			full_definition = excluded.full_definition,
+			short_definitions_json = excluded.short_definitions_json,
+			translations_lt_json = excluded.translations_lt_json,
+			updated_at = CURRENT_TIMESTAMP
+	`)
+	if err != nil {
+		return err
+	}
+	defer upsertOfflineSourceStmt.Close()
+
 	for _, item := range items {
 		shortDefs := item.ShortDefinitions
 		if shortDefs == nil {
@@ -490,6 +530,15 @@ func (s *Store) SaveBookLexemes(bookID int64, items []LexemeInput) error {
 
 		var lexemeID int64
 		if err := selectLexemeIDStmt.QueryRow(item.Lemma, item.POS).Scan(&lexemeID); err != nil {
+			return err
+		}
+
+		if _, err := upsertOfflineSourceStmt.Exec(
+			lexemeID,
+			item.FullDefinition,
+			string(shortJSON),
+			string(ltJSON),
+		); err != nil {
 			return err
 		}
 
@@ -596,6 +645,185 @@ func (s *Store) attachExcerpts(bookID int64, entries []LexemeEntry) error {
 		}
 	}
 	return nil
+}
+
+func deduplicateStrings(slices ...[]string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, list := range slices {
+		for _, item := range list {
+			trimmed := strings.TrimSpace(item)
+			if trimmed == "" {
+				continue
+			}
+			key := strings.ToLower(trimmed)
+			if _, exists := seen[key]; !exists {
+				seen[key] = struct{}{}
+				out = append(out, trimmed)
+			}
+		}
+	}
+	return out
+}
+
+func resolveEntryFromSources(entry *LexemeEntry, srcMap map[string]LexemeSource) {
+	if len(srcMap) == 0 {
+		return
+	}
+	if userSrc, hasUser := srcMap["user"]; hasUser {
+		entry.FullDefinition = userSrc.FullDefinition
+		if userSrc.ShortDefinitions != nil {
+			entry.ShortDefinitions = append([]string{}, userSrc.ShortDefinitions...)
+		} else {
+			entry.ShortDefinitions = []string{}
+		}
+		if userSrc.TranslationsLT != nil {
+			entry.TranslationsLT = append([]string{}, userSrc.TranslationsLT...)
+		} else {
+			entry.TranslationsLT = []string{}
+		}
+		return
+	}
+
+	offlineSrc, hasOffline := srcMap["offline"]
+	onlineSrc, hasOnline := srcMap["online"]
+
+	if hasOffline && strings.TrimSpace(offlineSrc.FullDefinition) != "" {
+		entry.FullDefinition = offlineSrc.FullDefinition
+	} else if hasOnline && strings.TrimSpace(onlineSrc.FullDefinition) != "" {
+		entry.FullDefinition = onlineSrc.FullDefinition
+	} else if hasOffline {
+		entry.FullDefinition = offlineSrc.FullDefinition
+	}
+
+	entry.ShortDefinitions = deduplicateStrings(offlineSrc.ShortDefinitions, onlineSrc.ShortDefinitions)
+	entry.TranslationsLT = deduplicateStrings(offlineSrc.TranslationsLT, onlineSrc.TranslationsLT)
+}
+
+func (s *Store) attachSources(entries []LexemeEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	placeholders := make([]string, len(entries))
+	args := make([]any, len(entries))
+	for i := range entries {
+		placeholders[i] = "?"
+		args[i] = entries[i].ID
+	}
+
+	query := fmt.Sprintf(`
+		SELECT lexeme_id, source, full_definition, short_definitions_json, translations_lt_json
+		FROM lexeme_sources
+		WHERE lexeme_id IN (%s)
+	`, strings.Join(placeholders, ","))
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	byLexeme := make(map[int64]map[string]LexemeSource)
+	for rows.Next() {
+		var src LexemeSource
+		var shortJSON, ltJSON string
+		if err := rows.Scan(&src.LexemeID, &src.Source, &src.FullDefinition, &shortJSON, &ltJSON); err != nil {
+			return err
+		}
+		if err := json.Unmarshal([]byte(shortJSON), &src.ShortDefinitions); err != nil || src.ShortDefinitions == nil {
+			src.ShortDefinitions = []string{}
+		}
+		if err := json.Unmarshal([]byte(ltJSON), &src.TranslationsLT); err != nil || src.TranslationsLT == nil {
+			src.TranslationsLT = []string{}
+		}
+		if byLexeme[src.LexemeID] == nil {
+			byLexeme[src.LexemeID] = make(map[string]LexemeSource)
+		}
+		byLexeme[src.LexemeID][src.Source] = src
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for i := range entries {
+		if srcMap, ok := byLexeme[entries[i].ID]; ok {
+			resolveEntryFromSources(&entries[i], srcMap)
+		}
+	}
+	return nil
+}
+
+func (s *Store) UpsertLexemeSource(
+	lexemeID int64,
+	source string,
+	fullDefinition string,
+	shortDefinitions []string,
+	translationsLT []string,
+) error {
+	if _, err := s.getLexemeStatus(lexemeID); err != nil {
+		return err
+	}
+	if shortDefinitions == nil {
+		shortDefinitions = []string{}
+	}
+	shortJSON, err := json.Marshal(shortDefinitions)
+	if err != nil {
+		return err
+	}
+	if translationsLT == nil {
+		translationsLT = []string{}
+	}
+	ltJSON, err := json.Marshal(translationsLT)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO lexeme_sources (
+			lexeme_id, source, full_definition, short_definitions_json, translations_lt_json, updated_at
+		) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(lexeme_id, source) DO UPDATE SET
+			full_definition = excluded.full_definition,
+			short_definitions_json = excluded.short_definitions_json,
+			translations_lt_json = excluded.translations_lt_json,
+			updated_at = CURRENT_TIMESTAMP
+	`, lexemeID, source, fullDefinition, string(shortJSON), string(ltJSON))
+	return err
+}
+
+func (s *Store) GetLexemeSources(lexemeID int64) (map[string]LexemeSource, error) {
+	if _, err := s.getLexemeStatus(lexemeID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(`
+		SELECT lexeme_id, source, full_definition, short_definitions_json, translations_lt_json
+		FROM lexeme_sources
+		WHERE lexeme_id = ?
+	`, lexemeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]LexemeSource)
+	for rows.Next() {
+		var src LexemeSource
+		var shortJSON, ltJSON string
+		if err := rows.Scan(&src.LexemeID, &src.Source, &src.FullDefinition, &shortJSON, &ltJSON); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(shortJSON), &src.ShortDefinitions); err != nil || src.ShortDefinitions == nil {
+			src.ShortDefinitions = []string{}
+		}
+		if err := json.Unmarshal([]byte(ltJSON), &src.TranslationsLT); err != nil || src.TranslationsLT == nil {
+			src.TranslationsLT = []string{}
+		}
+		out[src.Source] = src
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Store) ListBookVocabulary(bookID int64, filter VocabularyFilter) (VocabularyPage, error) {
@@ -742,6 +970,10 @@ func (s *Store) ListBookVocabulary(bookID int64, filter VocabularyFilter) (Vocab
 		return VocabularyPage{}, err
 	}
 
+	if err := s.attachSources(items); err != nil {
+		return VocabularyPage{}, err
+	}
+
 	if err := s.attachExcerpts(bookID, items); err != nil {
 		return VocabularyPage{}, err
 	}
@@ -749,11 +981,136 @@ func (s *Store) ListBookVocabulary(bookID int64, filter VocabularyFilter) (Vocab
 	return VocabularyPage{
 		Book:       book,
 		Items:      items,
-		Total:      total,
 		Page:       page,
 		PageSize:   pageSize,
+		Total:      total,
 		TotalPages: totalPages,
 	}, nil
+}
+
+func (s *Store) GetLexeme(lexemeID int64) (*LexemeEntry, error) {
+	var entry LexemeEntry
+	var shortJSON, ltJSON string
+	err := s.db.QueryRow(`
+		WITH tb AS (
+			SELECT COUNT(*) AS total_books FROM books
+		),
+		lc AS (
+			SELECT COUNT(*) AS books_with_lexeme
+			FROM book_lexemes
+			WHERE lexeme_id = ?
+		),
+		occ AS (
+			SELECT COALESCE(MAX(occurrence_count), 0) AS occurrence_count
+			FROM book_lexemes
+			WHERE lexeme_id = ?
+		)
+		SELECT
+			l.id,
+			l.lemma,
+			l.pos,
+			l.prompt_form,
+			COALESCE(l.cefr_level, ''),
+			max(0.0, 5.0 - l.global_zipf_freq) AS global_rarity,
+			CASE WHEN lc.books_with_lexeme > 0
+				THEN ln(1.0 + CAST(tb.total_books AS REAL) / CAST(lc.books_with_lexeme AS REAL))
+				ELSE 0.0
+			END AS library_idf,
+			ln(1.0 + CAST(occ.occurrence_count AS REAL)) AS book_salience,
+			(
+				max(0.0, 5.0 - l.global_zipf_freq)
+				+ CASE WHEN lc.books_with_lexeme > 0
+					THEN ln(1.0 + CAST(tb.total_books AS REAL) / CAST(lc.books_with_lexeme AS REAL))
+					ELSE 0.0
+				END
+				+ ln(1.0 + CAST(occ.occurrence_count AS REAL))
+			) AS obscurity_score,
+			l.global_zipf_freq,
+			occ.occurrence_count,
+			lc.books_with_lexeme,
+			tb.total_books,
+			l.full_definition,
+			l.short_definitions_json,
+			l.translations_lt_json,
+			l.mastery_level,
+			l.known
+		FROM lexemes l
+		CROSS JOIN tb
+		CROSS JOIN lc
+		CROSS JOIN occ
+		WHERE l.id = ?
+	`, lexemeID, lexemeID, lexemeID).Scan(
+		&entry.ID,
+		&entry.Lemma,
+		&entry.POS,
+		&entry.PromptForm,
+		&entry.CEFRLevel,
+		&entry.GlobalRarity,
+		&entry.LibraryIDF,
+		&entry.BookSalience,
+		&entry.ObscurityScore,
+		&entry.GlobalZipfFreq,
+		&entry.OccurrenceCount,
+		&entry.BooksWithLexeme,
+		&entry.TotalBooks,
+		&entry.FullDefinition,
+		&shortJSON,
+		&ltJSON,
+		&entry.MasteryLevel,
+		&entry.Known,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrLexemeNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(shortJSON), &entry.ShortDefinitions); err != nil || entry.ShortDefinitions == nil {
+		entry.ShortDefinitions = []string{}
+	}
+	if err := json.Unmarshal([]byte(ltJSON), &entry.TranslationsLT); err != nil || entry.TranslationsLT == nil {
+		entry.TranslationsLT = []string{}
+	}
+	entry.Excerpts = []Excerpt{}
+
+	entries := []LexemeEntry{entry}
+	if err := s.attachSources(entries); err != nil {
+		return nil, err
+	}
+	return &entries[0], nil
+}
+
+func (s *Store) PatchLexeme(lexemeID int64, patch LexemePatch) (*LexemeEntry, error) {
+	current, err := s.GetLexeme(lexemeID)
+	if err != nil {
+		return nil, err
+	}
+
+	if patch.Known != nil {
+		if _, err := s.db.Exec(`UPDATE lexemes SET known = ? WHERE id = ?`, *patch.Known, lexemeID); err != nil {
+			return nil, err
+		}
+	}
+
+	if patch.FullDefinition != nil || patch.ShortDefinitions != nil || patch.TranslationsLT != nil {
+		fullDef := current.FullDefinition
+		if patch.FullDefinition != nil {
+			fullDef = *patch.FullDefinition
+		}
+		shortDefs := current.ShortDefinitions
+		if patch.ShortDefinitions != nil {
+			shortDefs = *patch.ShortDefinitions
+		}
+		transLT := current.TranslationsLT
+		if patch.TranslationsLT != nil {
+			transLT = *patch.TranslationsLT
+		}
+		if err := s.UpsertLexemeSource(lexemeID, "user", fullDef, shortDefs, transLT); err != nil {
+			return nil, err
+		}
+	}
+
+	return s.GetLexeme(lexemeID)
 }
 
 func (s *Store) getLexemeStatus(lexemeID int64) (*LexemeStatus, error) {
@@ -891,6 +1248,10 @@ func (s *Store) SelectQuizCandidates(bookID int64, size int) (QuizSession, error
 		items = append(items, entry)
 	}
 	if err := rows.Err(); err != nil {
+		return QuizSession{}, err
+	}
+
+	if err := s.attachSources(items); err != nil {
 		return QuizSession{}, err
 	}
 

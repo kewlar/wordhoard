@@ -602,5 +602,158 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(evaluateQuizAnswer('to ', lexeme)).toBe(false);
     expect(evaluateQuizAnswer('unrelated', lexeme)).toBe(false);
   });
+
+  it('allows inline editing of a lexeme in the Book Vocabulary Browser and updates displayed values immediately on Save', async () => {
+    const user = userEvent.setup();
+    window.history.pushState({}, '', '/books/1/vocabulary');
+
+    const patchLexeme = vi.fn(async (id: number, patch) => ({
+      ...sampleVocabularyPage.items[0]!,
+      id,
+      full_definition: patch.full_definition ?? sampleVocabularyPage.items[0]!.full_definition,
+      short_definitions: patch.short_definitions ?? sampleVocabularyPage.items[0]!.short_definitions,
+      translations_lt: patch.translations_lt ?? sampleVocabularyPage.items[0]!.translations_lt,
+    }));
+
+    const client: ApiClient = {
+      listBooks: async () => [sampleBook],
+      getBookVocabulary: async () => sampleVocabularyPage,
+      patchLexeme,
+    };
+
+    render(<App apiClient={client} />);
+
+    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+
+    // Click Edit on the first lexeme ("laconic (adj.)")
+    const editButtons = screen.getAllByRole('button', { name: /^edit$/i });
+    await user.click(editButtons[0]!);
+
+    // Verify form fields are pre-populated with current resolved values
+    const translationsInput = screen.getByLabelText(/lithuanian translations/i) as HTMLInputElement;
+    const shortDefsInput = screen.getByLabelText(/short definitions/i) as HTMLInputElement;
+    const fullDefInput = screen.getByLabelText(/full definition/i) as HTMLTextAreaElement;
+
+    expect(translationsInput.value).toBe('lakoniškas, glaustas');
+    expect(shortDefsInput.value).toBe('concise, terse');
+    expect(fullDefInput.value).toContain('1. Using very few words');
+
+    // Edit all three fields
+    await user.clear(translationsInput);
+    await user.type(translationsInput, 'trumpas, lakoniškas');
+    await user.clear(shortDefsInput);
+    await user.type(shortDefsInput, 'brief, succinct');
+    await user.clear(fullDefInput);
+    await user.type(fullDefInput, '1. Custom edited definition');
+
+    // Click Save
+    const saveBtn = screen.getByRole('button', { name: /^save$/i });
+    await user.click(saveBtn);
+
+    expect(patchLexeme).toHaveBeenCalledWith(101, {
+      translations_lt: ['trumpas', 'lakoniškas'],
+      short_definitions: ['brief', 'succinct'],
+      full_definition: '1. Custom edited definition',
+    });
+
+    // Edit form closes and updated values are displayed immediately
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /^save$/i })).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('trumpas, lakoniškas')).toBeInTheDocument();
+    expect(screen.getByText('brief, succinct')).toBeInTheDocument();
+    expect(screen.getByText('1. Custom edited definition')).toBeInTheDocument();
+  });
+
+  it('re-evaluates an initially incorrect quiz answer on the reveal card after editing the lexeme, flipping to Correct, updating first-attempt mastery, removing from repeat queue, and focusing Next/Finish', async () => {
+    const user = userEvent.setup();
+    window.history.pushState({}, '', '/books/1/quiz');
+
+    const startBookQuiz = vi.fn(async () => ({
+      book: sampleBook,
+      items: sampleVocabularyPage.items,
+    }));
+
+    const recordLexemeAttempt = vi.fn(async (id: number, body: { first_attempt_correct: boolean }) => ({
+      id,
+      lemma: id === 101 ? 'laconic' : 'obfuscate',
+      pos: id === 101 ? 'adjective' : 'verb',
+      mastery_level: body.first_attempt_correct ? 1 : 0,
+      known: false,
+    }));
+
+    const patchLexeme = vi.fn(async (id: number, patch) => ({
+      ...sampleVocabularyPage.items[0]!,
+      id,
+      full_definition: patch.full_definition ?? sampleVocabularyPage.items[0]!.full_definition,
+      short_definitions: patch.short_definitions ?? sampleVocabularyPage.items[0]!.short_definitions,
+      translations_lt: patch.translations_lt ?? sampleVocabularyPage.items[0]!.translations_lt,
+    }));
+
+    const client: ApiClient = {
+      listBooks: async () => [sampleBook],
+      getBookVocabulary: async () => sampleVocabularyPage,
+      startBookQuiz,
+      recordLexemeAttempt,
+      patchLexeme,
+    };
+
+    render(<App apiClient={client} shuffleQuizItems={(items) => [...items]} />);
+
+    // Prompt 1: "laconic (adj.)"
+    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    expect(screen.getByText('0 / 2')).toBeInTheDocument();
+
+    // Submit a synonym ("trumpas") that is NOT yet in translations_lt (['lakoniškas', 'glaustas'])
+    await user.keyboard('trumpas{Enter}');
+
+    // Initially marked Incorrect, progress is 0 / 2, and first attempt recorded as false
+    expect(await screen.findByText(/^incorrect$/i)).toBeInTheDocument();
+    expect(screen.getByText('0 / 2')).toBeInTheDocument();
+    expect(recordLexemeAttempt).toHaveBeenCalledTimes(1);
+    expect(recordLexemeAttempt).toHaveBeenLastCalledWith(101, { first_attempt_correct: false });
+
+    // Click Edit on the Quiz reveal card
+    const editBtn = screen.getByRole('button', { name: /^edit$/i });
+    await user.click(editBtn);
+
+    const translationsInput = screen.getByLabelText(/lithuanian translations/i) as HTMLInputElement;
+    expect(translationsInput.value).toBe('lakoniškas, glaustas');
+
+    // Add "trumpas" to Lithuanian Translations and click Save
+    await user.clear(translationsInput);
+    await user.type(translationsInput, 'lakoniškas, glaustas, trumpas');
+
+    const saveBtn = screen.getByRole('button', { name: /^save$/i });
+    await user.click(saveBtn);
+
+    expect(patchLexeme).toHaveBeenCalledWith(101, {
+      translations_lt: ['lakoniškas', 'glaustas', 'trumpas'],
+      short_definitions: ['concise', 'terse'],
+      full_definition: '1. Using very few words\n2. Concise to the point of seeming rude',
+    });
+
+    // Reveal card flips to Correct, progress increments to 1 / 2, first-attempt mastery updates (+1 via first_attempt_correct: true), and focus returns to Next
+    expect(await screen.findByText(/^correct$/i)).toBeInTheDocument();
+    expect(screen.getByText('1 / 2')).toBeInTheDocument();
+    expect(recordLexemeAttempt).toHaveBeenCalledTimes(2);
+    expect(recordLexemeAttempt).toHaveBeenLastCalledWith(101, { first_attempt_correct: true });
+
+    const nextBtn = screen.getByRole('button', { name: /^next$/i });
+    await waitFor(() => {
+      expect(nextBtn).toHaveFocus();
+    });
+
+    // Press Enter on Next -> advances to second item ("to obfuscate")
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText('to obfuscate')).toBeInTheDocument();
+
+    // Answer second item ("to obfuscate") correctly -> since item 101 was removed from the repeat queue, the quiz is now at 2 / 2 and shows "Finish"!
+    await user.keyboard('obscure{Enter}');
+    expect(await screen.findByText(/^correct$/i)).toBeInTheDocument();
+    expect(screen.getByText('2 / 2')).toBeInTheDocument();
+    const finishBtn = screen.getByRole('button', { name: /^finish$/i });
+    expect(finishBtn).toHaveFocus();
+  });
 });
 

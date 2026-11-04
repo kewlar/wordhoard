@@ -77,13 +77,20 @@ export interface QuizSession {
   items: LexemeEntry[];
 }
 
+export interface LexemePatch {
+  known?: boolean;
+  full_definition?: string;
+  short_definitions?: string[];
+  translations_lt?: string[];
+}
+
 export interface ApiClient {
   listBooks(): Promise<BookSummary[]>;
   getBookVocabulary?(bookId: number, query?: VocabularyQuery): Promise<VocabularyPage>;
   patchLexeme?(
     lexemeId: number,
-    patch: { known?: boolean }
-  ): Promise<LexemeStatus>;
+    patch: LexemePatch
+  ): Promise<LexemeEntry | LexemeStatus>;
   startBookQuiz?(bookId: number, size?: number): Promise<QuizSession>;
   recordLexemeAttempt?(
     lexemeId: number,
@@ -131,8 +138,8 @@ export const defaultApiClient: ApiClient = {
 
   async patchLexeme(
     lexemeId: number,
-    patch: { known?: boolean }
-  ): Promise<LexemeStatus> {
+    patch: LexemePatch
+  ): Promise<LexemeEntry | LexemeStatus> {
     const res = await fetch(`/api/lexemes/${lexemeId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -141,7 +148,7 @@ export const defaultApiClient: ApiClient = {
     if (!res.ok) {
       throw new Error(`Failed to update lexeme (${res.status})`);
     }
-    return (await res.json()) as LexemeStatus;
+    return (await res.json()) as LexemeEntry | LexemeStatus;
   },
 
   async startBookQuiz(bookId: number, size = 20): Promise<QuizSession> {

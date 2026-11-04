@@ -168,14 +168,22 @@ func (s *Server) handlePatchLexeme(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Known *bool `json:"known"`
+		Known            *bool     `json:"known"`
+		FullDefinition   *string   `json:"full_definition"`
+		ShortDefinitions *[]string `json:"short_definitions"`
+		TranslationsLT   *[]string `json:"translations_lt"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	updated, err := s.store.UpdateLexeme(id, body.Known)
+	updated, err := s.store.PatchLexeme(id, db.LexemePatch{
+		Known:            body.Known,
+		FullDefinition:   body.FullDefinition,
+		ShortDefinitions: body.ShortDefinitions,
+		TranslationsLT:   body.TranslationsLT,
+	})
 	if errors.Is(err, db.ErrLexemeNotFound) {
 		writeJSONError(w, http.StatusNotFound, "lexeme not found")
 		return

@@ -320,6 +320,146 @@ const LEXEME_STATUS_PILLS: Array<{ key: 'unseen' | 'learning' | 'mastered' | 'kn
   { key: 'known', label: 'Known' },
 ];
 
+function parseCommaSeparatedList(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+interface LexemeEditFormProps {
+  item: Pick<LexemeEntry, 'id' | 'translations_lt' | 'short_definitions' | 'full_definition'>;
+  onSave: (fields: {
+    translations_lt: string[];
+    short_definitions: string[];
+    full_definition: string;
+  }) => Promise<void> | void;
+  onCancel: () => void;
+}
+
+function LexemeEditForm({ item, onSave, onCancel }: LexemeEditFormProps) {
+  const [translationsInput, setTranslationsInput] = useState(
+    (item.translations_lt ?? []).join(', ')
+  );
+  const [shortDefsInput, setShortDefsInput] = useState(
+    (item.short_definitions ?? []).join(', ')
+  );
+  const [fullDefInput, setFullDefInput] = useState(item.full_definition ?? '');
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await onSave({
+        translations_lt: parseCommaSeparatedList(translationsInput),
+        short_definitions: parseCommaSeparatedList(shortDefsInput),
+        full_definition: fullDefInput.trim(),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={(e) => void handleSubmit(e)}
+      style={{
+        marginTop: '0.75rem',
+        padding: '0.85rem',
+        borderRadius: '6px',
+        border: '1px solid #ccd4e0',
+        backgroundColor: '#f8fafd',
+        display: 'grid',
+        gap: '0.65rem',
+      }}
+    >
+      <label style={{ display: 'grid', gap: '0.25rem', fontSize: '0.88rem', fontWeight: 600 }}>
+        <span>Lithuanian Translations (comma-separated)</span>
+        <input
+          type="text"
+          value={translationsInput}
+          onChange={(e) => setTranslationsInput(e.target.value)}
+          style={{
+            padding: '0.45rem 0.6rem',
+            borderRadius: '4px',
+            border: '1px solid #bbb',
+            fontSize: '0.92rem',
+            fontWeight: 400,
+          }}
+        />
+      </label>
+
+      <label style={{ display: 'grid', gap: '0.25rem', fontSize: '0.88rem', fontWeight: 600 }}>
+        <span>Short Definitions (comma-separated)</span>
+        <input
+          type="text"
+          value={shortDefsInput}
+          onChange={(e) => setShortDefsInput(e.target.value)}
+          style={{
+            padding: '0.45rem 0.6rem',
+            borderRadius: '4px',
+            border: '1px solid #bbb',
+            fontSize: '0.92rem',
+            fontWeight: 400,
+          }}
+        />
+      </label>
+
+      <label style={{ display: 'grid', gap: '0.25rem', fontSize: '0.88rem', fontWeight: 600 }}>
+        <span>Full Definition</span>
+        <textarea
+          rows={3}
+          value={fullDefInput}
+          onChange={(e) => setFullDefInput(e.target.value)}
+          style={{
+            padding: '0.45rem 0.6rem',
+            borderRadius: '4px',
+            border: '1px solid #bbb',
+            fontSize: '0.92rem',
+            fontWeight: 400,
+            fontFamily: 'inherit',
+          }}
+        />
+      </label>
+
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+        <button
+          type="submit"
+          disabled={saving}
+          style={{
+            padding: '0.35rem 0.85rem',
+            borderRadius: '4px',
+            border: 'none',
+            backgroundColor: '#0b57d0',
+            color: '#fff',
+            fontSize: '0.85rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{
+            padding: '0.35rem 0.85rem',
+            borderRadius: '4px',
+            border: '1px solid #ccd4e0',
+            backgroundColor: '#fff',
+            color: '#444',
+            fontSize: '0.85rem',
+            cursor: 'pointer',
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyViewProps) {
   const [pageData, setPageData] = useState<VocabularyPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -334,6 +474,7 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
   ]);
   const [refreshTick, setRefreshTick] = useState(0);
   const [expandedContextIds, setExpandedContextIds] = useState<Record<number, boolean>>({});
+  const [editingLexemeId, setEditingLexemeId] = useState<number | null>(null);
 
   const toggleStatus = (key: 'unseen' | 'learning' | 'mastered' | 'known') => {
     setStatuses((prev) => {
@@ -393,6 +534,46 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
     const nextKnown = !item.known;
     await patchFn(item.id, { known: nextKnown });
     setRefreshTick((t) => t + 1);
+  };
+
+  const handleSaveEdit = async (
+    item: LexemeEntry,
+    fields: {
+      translations_lt: string[];
+      short_definitions: string[];
+      full_definition: string;
+    }
+  ) => {
+    const patchFn = apiClient.patchLexeme ?? defaultApiClient.patchLexeme!;
+    const res = await patchFn(item.id, fields);
+    setPageData((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      return {
+        ...prev,
+        items: prev.items.map((it) =>
+          it.id === item.id
+            ? {
+                ...it,
+                translations_lt:
+                  'translations_lt' in res && Array.isArray(res.translations_lt)
+                    ? res.translations_lt
+                    : fields.translations_lt,
+                short_definitions:
+                  'short_definitions' in res && Array.isArray(res.short_definitions)
+                    ? res.short_definitions
+                    : fields.short_definitions,
+                full_definition:
+                  'full_definition' in res && typeof res.full_definition === 'string'
+                    ? res.full_definition
+                    : fields.full_definition,
+              }
+            : it
+        ),
+      };
+    });
+    setEditingLexemeId(null);
   };
 
   const items = pageData?.items ?? [];
@@ -647,7 +828,33 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
                 >
                   {item.known ? 'Known (Unmark)' : 'Already Known / Ignore'}
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEditingLexemeId((prev) => (prev === item.id ? null : item.id))
+                  }
+                  style={{
+                    background: 'none',
+                    border: '1px solid #ccd4e0',
+                    borderRadius: '4px',
+                    padding: '0.25rem 0.6rem',
+                    fontSize: '0.85rem',
+                    color: '#0b57d0',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Edit
+                </button>
               </div>
+
+              {editingLexemeId === item.id && (
+                <LexemeEditForm
+                  item={item}
+                  onSave={(fields) => handleSaveEdit(item, fields)}
+                  onCancel={() => setEditingLexemeId(null)}
+                />
+              )}
 
               {expandedContextIds[item.id] && (
                 <div style={{ marginTop: '0.75rem' }}>
@@ -758,7 +965,9 @@ function BookQuizView({
   const [answerInput, setAnswerInput] = useState('');
   const [submittedAnswer, setSubmittedAnswer] = useState('');
   const [lastCorrect, setLastCorrect] = useState(false);
+  const [wasFirstAttemptOnReveal, setWasFirstAttemptOnReveal] = useState(false);
   const [excerptOpen, setExcerptOpen] = useState(false);
+  const [editingReveal, setEditingReveal] = useState(false);
 
   const attemptedLexemeIdsRef = useRef<Set<number>>(new Set());
   const answerInputRef = useRef<HTMLInputElement | null>(null);
@@ -808,10 +1017,10 @@ function BookQuizView({
   }, [loading, currentItem, phase]);
 
   useEffect(() => {
-    if (!loading && currentItem && phase === 'reveal') {
+    if (!loading && currentItem && phase === 'reveal' && !editingReveal) {
       nextButtonRef.current?.focus();
     }
-  }, [loading, currentItem, phase]);
+  }, [loading, currentItem, phase, editingReveal]);
 
   const handleSubmitPrompt = (e: React.FormEvent) => {
     e.preventDefault();
@@ -835,8 +1044,63 @@ function BookQuizView({
 
     setSubmittedAnswer(answerInput);
     setLastCorrect(isCorrect);
+    setWasFirstAttemptOnReveal(isFirstAttempt);
     setExcerptOpen(false);
+    setEditingReveal(false);
     setPhase('reveal');
+  };
+
+  const handleSaveQuizEdit = async (fields: {
+    translations_lt: string[];
+    short_definitions: string[];
+    full_definition: string;
+  }) => {
+    if (!currentItem) {
+      return;
+    }
+    const patchFn = apiClient.patchLexeme ?? defaultApiClient.patchLexeme!;
+    const res = await patchFn(currentItem.id, fields);
+
+    const updatedItem: LexemeEntry = {
+      ...currentItem,
+      translations_lt:
+        'translations_lt' in res && Array.isArray(res.translations_lt)
+          ? res.translations_lt
+          : fields.translations_lt,
+      short_definitions:
+        'short_definitions' in res && Array.isArray(res.short_definitions)
+          ? res.short_definitions
+          : fields.short_definitions,
+      full_definition:
+        'full_definition' in res && typeof res.full_definition === 'string'
+          ? res.full_definition
+          : fields.full_definition,
+    };
+
+    const nowMatches =
+      !lastCorrect && evaluateQuizAnswer(submittedAnswer, updatedItem);
+
+    setQueue((prev) => {
+      const mapped = prev.map((it) => (it.id === currentItem.id ? updatedItem : it));
+      if (nowMatches) {
+        return mapped.filter((it, idx) => idx === 0 || it.id !== currentItem.id);
+      }
+      return mapped;
+    });
+
+    if (nowMatches) {
+      setLastCorrect(true);
+      setCorrectCount((c) => c + 1);
+      if (wasFirstAttemptOnReveal) {
+        setWasFirstAttemptOnReveal(false);
+        const recordAttempt =
+          apiClient.recordLexemeAttempt ?? defaultApiClient.recordLexemeAttempt!;
+        void recordAttempt(currentItem.id, { first_attempt_correct: true });
+      }
+    }
+
+    setEditingReveal(false);
+    nextButtonRef.current?.focus();
   };
 
   const handleToggleQuizKnown = async () => {
@@ -879,6 +1143,7 @@ function BookQuizView({
     setAnswerInput('');
     setSubmittedAnswer('');
     setExcerptOpen(false);
+    setEditingReveal(false);
     setPhase('prompt');
   };
 
@@ -1164,7 +1429,34 @@ function BookQuizView({
                   >
                     {currentItem.known ? 'Known (Unmark)' : 'Already Known / Ignore'}
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setEditingReveal((v) => !v)}
+                    style={{
+                      background: 'none',
+                      border: '1px solid #ccd4e0',
+                      borderRadius: '6px',
+                      padding: '0.5rem 0.85rem',
+                      fontSize: '0.9rem',
+                      color: '#0b57d0',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Edit
+                  </button>
                 </div>
+
+                {editingReveal && (
+                  <LexemeEditForm
+                    item={currentItem}
+                    onSave={handleSaveQuizEdit}
+                    onCancel={() => {
+                      setEditingReveal(false);
+                      nextButtonRef.current?.focus();
+                    }}
+                  />
+                )}
               </div>
             )}
           </div>
