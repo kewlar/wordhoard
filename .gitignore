@@ -13,3 +13,6 @@ web/dist/
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Local secrets
+.env
