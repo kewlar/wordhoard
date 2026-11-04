@@ -17,7 +17,7 @@ type cliFakeTranslator struct {
 	batchSizes []int
 }
 
-func (f *cliFakeTranslator) TranslateBatch(_ context.Context, items []translate.TranslateRequest) (map[int64][]string, error) {
+func (f *cliFakeTranslator) TranslateBatch(_ context.Context, items []translate.Request) (map[int64][]string, error) {
 	f.batchSizes = append(f.batchSizes, len(items))
 	out := make(map[int64][]string)
 	for _, it := range items {

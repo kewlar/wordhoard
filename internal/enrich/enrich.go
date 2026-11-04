@@ -68,9 +68,9 @@ func Run(ctx context.Context, store *db.Store, tr translate.Translator, opts Opt
 		chunk := candidates[start:min(start+batchSize, len(candidates))]
 		p.Batch = batch
 
-		reqs := make([]translate.TranslateRequest, len(chunk))
+		reqs := make([]translate.Request, len(chunk))
 		for i, lex := range chunk {
-			reqs[i] = translate.TranslateRequest{
+			reqs[i] = translate.Request{
 				ID:             lex.ID,
 				Lemma:          lex.Lemma,
 				POS:            lex.POS,

@@ -13,12 +13,12 @@ import (
 )
 
 type fakeTranslator struct {
-	batches [][]translate.TranslateRequest
+	batches [][]translate.Request
 	answers map[string][]string
 	failOn  int // 1-based batch number that returns an error; 0 = never
 }
 
-func (f *fakeTranslator) TranslateBatch(_ context.Context, items []translate.TranslateRequest) (map[int64][]string, error) {
+func (f *fakeTranslator) TranslateBatch(_ context.Context, items []translate.Request) (map[int64][]string, error) {
 	f.batches = append(f.batches, items)
 	if f.failOn == len(f.batches) {
 		return nil, errors.New("provider unavailable")

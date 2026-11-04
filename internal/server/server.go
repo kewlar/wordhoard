@@ -270,7 +270,7 @@ func (s *Server) handleTranslateLexeme(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	batchRes, err := tr.TranslateBatch(r.Context(), []translate.TranslateRequest{
+	batchRes, err := tr.TranslateBatch(r.Context(), []translate.Request{
 		{
 			ID:             lex.ID,
 			Lemma:          lex.Lemma,

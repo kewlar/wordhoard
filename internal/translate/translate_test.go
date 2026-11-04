@@ -124,7 +124,7 @@ func TestGeminiTranslatorTranslateBatch(t *testing.T) {
 		t.Fatalf("translate.New(gemini): %v", err)
 	}
 
-	got, err := tr.TranslateBatch(context.Background(), []translate.TranslateRequest{
+	got, err := tr.TranslateBatch(context.Background(), []translate.Request{
 		{
 			ID:             101,
 			Lemma:          "laconic",
@@ -228,7 +228,7 @@ func TestOpenAITranslatorTranslateBatch(t *testing.T) {
 		t.Fatalf("translate.New(openai): %v", err)
 	}
 
-	got, err := tr.TranslateBatch(context.Background(), []translate.TranslateRequest{
+	got, err := tr.TranslateBatch(context.Background(), []translate.Request{
 		{
 			ID:             201,
 			Lemma:          "conundrum",
@@ -290,7 +290,7 @@ func TestDeepLTranslatorTranslateBatch(t *testing.T) {
 		t.Fatalf("translate.New(deepl): %v", err)
 	}
 
-	got, err := tr.TranslateBatch(context.Background(), []translate.TranslateRequest{
+	got, err := tr.TranslateBatch(context.Background(), []translate.Request{
 		{
 			ID:             301,
 			Lemma:          "ephemeral",

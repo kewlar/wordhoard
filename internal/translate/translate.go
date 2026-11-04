@@ -22,7 +22,7 @@ const (
 	DefaultOpenAIModel = "gpt-4o-mini"
 )
 
-type TranslateRequest struct {
+type Request struct {
 	ID             int64  `json:"id"`
 	Lemma          string `json:"lemma"`
 	POS            string `json:"pos"`
@@ -31,7 +31,7 @@ type TranslateRequest struct {
 }
 
 type Translator interface {
-	TranslateBatch(ctx context.Context, items []TranslateRequest) (map[int64][]string, error)
+	TranslateBatch(ctx context.Context, items []Request) (map[int64][]string, error)
 }
 
 type Config struct {
@@ -244,7 +244,7 @@ var geminiResponseSchema = map[string]any{
 	"required": []string{"items"},
 }
 
-func buildBatchPrompt(items []TranslateRequest) (string, error) {
+func buildBatchPrompt(items []Request) (string, error) {
 	payload, err := json.Marshal(items)
 	if err != nil {
 		return "", err
@@ -323,7 +323,7 @@ type geminiTranslator struct {
 	client  *http.Client
 }
 
-func (g *geminiTranslator) TranslateBatch(ctx context.Context, items []TranslateRequest) (map[int64][]string, error) {
+func (g *geminiTranslator) TranslateBatch(ctx context.Context, items []Request) (map[int64][]string, error) {
 	if len(items) == 0 {
 		return map[int64][]string{}, nil
 	}
@@ -399,7 +399,7 @@ type openAITranslator struct {
 	client  *http.Client
 }
 
-func (o *openAITranslator) TranslateBatch(ctx context.Context, items []TranslateRequest) (map[int64][]string, error) {
+func (o *openAITranslator) TranslateBatch(ctx context.Context, items []Request) (map[int64][]string, error) {
 	if len(items) == 0 {
 		return map[int64][]string{}, nil
 	}
@@ -468,7 +468,7 @@ type deepLTranslator struct {
 	client  *http.Client
 }
 
-func (d *deepLTranslator) TranslateBatch(ctx context.Context, items []TranslateRequest) (map[int64][]string, error) {
+func (d *deepLTranslator) TranslateBatch(ctx context.Context, items []Request) (map[int64][]string, error) {
 	out := make(map[int64][]string, len(items))
 	if len(items) == 0 {
 		return out, nil
