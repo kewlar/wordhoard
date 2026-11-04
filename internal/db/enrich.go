@@ -13,9 +13,11 @@ type EnrichFilter struct {
 }
 
 // ListEnrichCandidates returns imported Lexemes whose resolved Lithuanian
-// Translations are empty, resolved as described in ADR-0001. Lexemes with a
-// `user` source are never candidates: the user's values always win, so an
-// online translation would not be displayed.
+// Translations are empty, resolved as described in ADR-0001 and implemented by
+// resolveEntryFromSources. Resolution is per row, not per field: when a `user`
+// source exists its values are displayed wholesale, even if its translations
+// are empty, so an online translation would never be shown. Lexemes with a
+// `user` source are therefore never candidates.
 func (s *Store) ListEnrichCandidates(filter EnrichFilter) ([]LexemeEntry, error) {
 	var b strings.Builder
 	args := []any{}
