@@ -209,7 +209,7 @@ func parseDotEnvFile(path string) (map[string]string, error) {
 }
 
 const systemPromptInstruction = `You are an expert English-to-Lithuanian lexicographer.
-For each provided English lexeme, return 1 to 4 concise, natural Lithuanian (lt) dictionary translations that match the exact Part of Speech (pos / prompt_form) and the senses in full_definition.
+For each provided English lexeme, return 1 to 5 concise, natural Lithuanian (lt) dictionary translations that match the exact Part of Speech (pos / prompt_form) and the senses in full_definition.
 Use canonical dictionary forms in Lithuanian:
 - verbs: infinitive (bendratis, e.g., "temdyti", "bėgti")
 - nouns: nominative singular (vienaskaitos vardininkas, e.g., "mįslė")
@@ -218,6 +218,31 @@ Use canonical dictionary forms in Lithuanian:
 
 Return ONLY valid JSON with the shape:
 {"items": [{"id": <number>, "translations_lt": ["<translation1>", "<translation2>"]}]}`
+
+// geminiResponseSchema constrains Gemini's JSON output to the shape requested
+// in systemPromptInstruction, with 1 to 5 translations per lexeme.
+var geminiResponseSchema = map[string]any{
+	"type": "OBJECT",
+	"properties": map[string]any{
+		"items": map[string]any{
+			"type": "ARRAY",
+			"items": map[string]any{
+				"type": "OBJECT",
+				"properties": map[string]any{
+					"id": map[string]any{"type": "INTEGER"},
+					"translations_lt": map[string]any{
+						"type":     "ARRAY",
+						"items":    map[string]any{"type": "STRING"},
+						"minItems": 1,
+						"maxItems": 5,
+					},
+				},
+				"required": []string{"id", "translations_lt"},
+			},
+		},
+	},
+	"required": []string{"items"},
+}
 
 func buildBatchPrompt(items []TranslateRequest) (string, error) {
 	payload, err := json.Marshal(items)
@@ -317,6 +342,7 @@ func (g *geminiTranslator) TranslateBatch(ctx context.Context, items []Translate
 		},
 		"generationConfig": map[string]any{
 			"responseMimeType": "application/json",
+			"responseSchema":   geminiResponseSchema,
 		},
 	}
 	bodyBytes, err := json.Marshal(reqBody)

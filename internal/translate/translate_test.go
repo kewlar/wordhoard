@@ -162,6 +162,35 @@ func TestGeminiTranslatorTranslateBatch(t *testing.T) {
 	if len(got[102]) != 2 || got[102][0] != "temdyti" || got[102][1] != "klaidinti" {
 		t.Errorf("unexpected translations for 102: %v", got[102])
 	}
+
+	if !strings.Contains(capturedBody, "1 to 5 concise") {
+		t.Errorf("expected prompt to ask for 1 to 5 translations, got %s", capturedBody)
+	}
+	var reqBody struct {
+		GenerationConfig struct {
+			ResponseSchema struct {
+				Properties struct {
+					Items struct {
+						Items struct {
+							Properties struct {
+								TranslationsLT struct {
+									MinItems int `json:"minItems"`
+									MaxItems int `json:"maxItems"`
+								} `json:"translations_lt"`
+							} `json:"properties"`
+						} `json:"items"`
+					} `json:"items"`
+				} `json:"properties"`
+			} `json:"responseSchema"`
+		} `json:"generationConfig"`
+	}
+	if err := json.Unmarshal([]byte(capturedBody), &reqBody); err != nil {
+		t.Fatalf("decode gemini request: %v", err)
+	}
+	lt := reqBody.GenerationConfig.ResponseSchema.Properties.Items.Items.Properties.TranslationsLT
+	if lt.MinItems != 1 || lt.MaxItems != 5 {
+		t.Errorf("expected responseSchema translations_lt to allow 1..5 items, got %d..%d", lt.MinItems, lt.MaxItems)
+	}
 }
 
 func TestOpenAITranslatorTranslateBatch(t *testing.T) {
