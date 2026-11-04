@@ -460,3 +460,46 @@ func TestIngestExtractsUpToFiveExcerptsWithAccurateOffsetsAndBoundedLongParagrap
 
 
 
+
+func TestRunReportsFineGrainedStagesWithChapterProgress(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := db.Open(filepath.Join(tempDir, "vocab.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer store.Close()
+
+	epubPath := createTestEPUB(t, tempDir, "novel.epub", "The Honourable Schoolboy", "John le Carré", "Jerry Westerby wandered through the labyrinthine bazaar.")
+
+	var events []ingest.Event
+	if _, err := ingest.Run(store, []string{epubPath}, func(ev ingest.Event) {
+		events = append(events, ev)
+	}); err != nil {
+		t.Fatalf("ingest.Run: %v", err)
+	}
+
+	var stages []ingest.Status
+	for _, ev := range events {
+		if len(stages) == 0 || stages[len(stages)-1] != ev.Status {
+			stages = append(stages, ev.Status)
+		}
+	}
+	want := []ingest.Status{ingest.StatusParsing, ingest.StatusReading, ingest.StatusAnalyzing, ingest.StatusSaving, ingest.StatusDone}
+	if fmt.Sprint(stages) != fmt.Sprint(want) {
+		t.Fatalf("stages = %v, want %v", stages, want)
+	}
+
+	var analyzing []ingest.Event
+	for _, ev := range events {
+		if ev.Status == ingest.StatusAnalyzing {
+			analyzing = append(analyzing, ev)
+		}
+	}
+	last := analyzing[len(analyzing)-1]
+	if last.Total != 1 || last.Progress != 1 {
+		t.Errorf("final Analyzing event progress = %d/%d, want 1/1", last.Progress, last.Total)
+	}
+	if analyzing[0].Progress != 0 || analyzing[0].Total != 1 {
+		t.Errorf("first Analyzing event progress = %d/%d, want 0/1", analyzing[0].Progress, analyzing[0].Total)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -37,21 +38,27 @@ type Status string
 
 const (
 	StatusPending    Status = "Pending"
-	StatusParsing    Status = "Parsing"
-	StatusExtracting Status = "Extracting"
-	StatusSkipped    Status = "Skipped"
-	StatusDone       Status = "Done"
-	StatusError      Status = "Error"
+	StatusParsing   Status = "Parsing"   // dedup check and metadata
+	StatusReading   Status = "Reading"   // unzipping chapters and paragraphs
+	StatusAnalyzing Status = "Analyzing" // tagging words and looking them up, chapter by chapter
+	StatusSaving    Status = "Saving"    // writing the book, lexemes and excerpts to SQLite
+	StatusSkipped   Status = "Skipped"
+	StatusDone      Status = "Done"
+	StatusError     Status = "Error"
 )
 
+// Event reports a file's progress. While Analyzing, Progress/Total count
+// chapters processed out of the book's total.
 type Event struct {
-	Index        int
-	Path         string
-	Status       Status
-	Title        string
-	Author       string
-	LexemeCount  int
-	Err          error
+	Index       int
+	Path        string
+	Status      Status
+	Title       string
+	Author      string
+	LexemeCount int
+	Progress    int
+	Total       int
+	Err         error
 }
 
 type FileResult struct {
@@ -60,8 +67,20 @@ type FileResult struct {
 	Title       string
 	Author      string
 	LexemeCount int
+	Progress    int
+	Total       int
 	Err         error
 }
+
+// taggerModel returns prose's part-of-speech model, decoded once per process.
+// Without it, every prose.NewDocument call re-decodes the ~5 MB model.
+var taggerModel = sync.OnceValue(func() *prose.Model {
+	doc, err := prose.NewDocument("", prose.WithExtraction(false), prose.WithSegmentation(false))
+	if err != nil {
+		panic(fmt.Sprintf("ingest: failed to load part-of-speech model: %v", err))
+	}
+	return doc.Model
+})
 
 type Summary struct {
 	TotalFiles int
@@ -238,21 +257,31 @@ func processFile(store *db.Store, dict *dictionary.Dictionary, index int, path s
 		}
 	}
 
-	emit(Event{
-		Index:  index,
-		Path:   path,
-		Status: StatusExtracting,
-		Title:  meta.Title,
-		Author: meta.Author,
-	})
+	stage := func(status Status, progress, total int) {
+		emit(Event{
+			Index:    index,
+			Path:     path,
+			Status:   status,
+			Title:    meta.Title,
+			Author:   meta.Author,
+			Progress: progress,
+			Total:    total,
+		})
+	}
 
+	stage(StatusReading, 0, 0)
 	chapters, err := epub.ReadChapters(path)
 	if err != nil {
 		emit(Event{Index: index, Path: path, Status: StatusError, Err: err})
 		return FileResult{Path: path, Status: StatusError, Err: err}
 	}
 
-	extracted := extractBookLexemes(chapters, dict)
+	stage(StatusAnalyzing, 0, len(chapters))
+	extracted := extractBookLexemes(chapters, dict, func(done int) {
+		stage(StatusAnalyzing, done, len(chapters))
+	})
+
+	stage(StatusSaving, 0, 0)
 
 	book, _, err := store.CreateBook(db.BookInput{
 		Title:    meta.Title,
@@ -321,12 +350,18 @@ func normalizeExcerptText(s string) string {
 	return strings.TrimSpace(quoteReplacer.Replace(s))
 }
 
-func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary) []db.LexemeInput {
+// extractBookLexemes calls onChapterDone (if non-nil) with the number of
+// chapters processed so far after each chapter.
+func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary, onChapterDone func(done int)) []db.LexemeInput {
 	counts := make(map[lexemeKey]int)
 	results := make(map[lexemeKey]*dictionary.LookupResult)
 	excerpts := make(map[lexemeKey][]db.ExcerptInput)
+	model := taggerModel()
 
-	for _, ch := range chapters {
+	for chIdx, ch := range chapters {
+		if chIdx > 0 && onChapterDone != nil {
+			onChapterDone(chIdx)
+		}
 		for _, para := range ch.Paragraphs {
 			clean := normalizeExcerptText(para)
 			if clean == "" {
@@ -336,6 +371,7 @@ func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary) []
 				clean,
 				prose.WithExtraction(false),
 				prose.WithSegmentation(false),
+				prose.UsingModel(model),
 			)
 			if err != nil {
 				continue
@@ -367,6 +403,9 @@ func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary) []
 				}
 			}
 		}
+	}
+	if len(chapters) > 0 && onChapterDone != nil {
+		onChapterDone(len(chapters))
 	}
 
 	out := make([]db.LexemeInput, 0, len(results))
@@ -520,6 +559,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Title:       msg.Title,
 				Author:      msg.Author,
 				LexemeCount: msg.LexemeCount,
+				Progress:    msg.Progress,
+				Total:       msg.Total,
 				Err:         msg.Err,
 			}
 		}
@@ -559,6 +600,8 @@ func renderDashboard(files []FileResult, summary Summary, finished bool) string 
 		}
 		if f.Status == StatusDone {
 			details += fmt.Sprintf(" [%d lexemes]", f.LexemeCount)
+		} else if f.Status == StatusAnalyzing && f.Total > 0 {
+			details += fmt.Sprintf(" [chapter %d/%d]", f.Progress, f.Total)
 		} else if f.Status == StatusError && f.Err != nil {
 			details += fmt.Sprintf(" [%v]", f.Err)
 		}
@@ -584,7 +627,7 @@ func formatStatus(s Status) string {
 		return doneStyle.Render(string(s))
 	case StatusSkipped:
 		return skippedStyle.Render(string(s))
-	case StatusParsing, StatusExtracting:
+	case StatusParsing, StatusReading, StatusAnalyzing, StatusSaving:
 		return activeStyle.Render(string(s))
 	case StatusError:
 		return errorStyle.Render(string(s))
