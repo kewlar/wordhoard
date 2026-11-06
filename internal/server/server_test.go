@@ -299,7 +299,7 @@ func TestGetBookVocabularyEndpoint(t *testing.T) {
 		t.Errorf("expected [laconic, conundrum, ephemeral], got [%s, %s, %s]",
 			page.Items[0].Lemma, page.Items[1].Lemma, page.Items[2].Lemma)
 	}
-	if page.Items[0].PromptForm != "laconic (adj.)" || len(page.Items[0].TranslationsLT) != 1 || page.Items[0].TranslationsLT[0] != "lakoniškas" {
+	if page.Items[0].Lemma != "laconic" || len(page.Items[0].TranslationsLT) != 1 || page.Items[0].TranslationsLT[0] != "lakoniškas" {
 		t.Errorf("unexpected first item fields: %+v", page.Items[0])
 	}
 	if len(page.Items[0].Excerpts) != 2 {
@@ -784,7 +784,6 @@ func TestPatchLexemeSavesUserSourceAndPreservesOfflineOnlineSources(t *testing.T
 		{
 			Lemma:            "laconic",
 			POS:              "adjective",
-			PromptForm:       "laconic (adj.)",
 			CEFRLevel:        "c1",
 			GlobalZipfFreq:   2.2,
 			FullDefinition:   "1. Brief and to the point",
@@ -914,7 +913,6 @@ func TestTranslateLexemeEndpoint(t *testing.T) {
 		{
 			Lemma:            "laconic",
 			POS:              "adjective",
-			PromptForm:       "laconic (adj.)",
 			CEFRLevel:        "c1",
 			GlobalZipfFreq:   2.2,
 			FullDefinition:   "1. Brief and to the point",
@@ -993,8 +991,8 @@ func TestTranslateLexemeEndpoint(t *testing.T) {
 		result.Lexeme.TranslationsLT[2] != "trumpas" {
 		t.Errorf("expected resolved lexeme.translations_lt [lakoniškas, glaustas, trumpas], got %v", result.Lexeme.TranslationsLT)
 	}
-	if !strings.Contains(geminiReqBody, "laconic (adj.)") || !strings.Contains(geminiReqBody, "Brief and to the point") {
-		t.Errorf("expected translator request to include prompt_form and full_definition, got %s", geminiReqBody)
+	if !strings.Contains(geminiReqBody, `\"pos\":\"adjective\"`) || !strings.Contains(geminiReqBody, "Brief and to the point") {
+		t.Errorf("expected translator request to include pos and full_definition, got %s", geminiReqBody)
 	}
 
 	// Verify lexeme_sources rows in database

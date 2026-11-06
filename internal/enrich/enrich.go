@@ -106,7 +106,6 @@ func RequestFor(lex db.LexemeEntry) translate.Request {
 		ID:             lex.ID,
 		Lemma:          lex.Lemma,
 		POS:            lex.POS,
-		PromptForm:     lex.PromptForm,
 		FullDefinition: lex.FullDefinition,
 	}
 }

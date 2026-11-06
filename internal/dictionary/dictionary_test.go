@@ -6,49 +6,6 @@ import (
 	"wordhoard/internal/dictionary"
 )
 
-func TestFormatPromptForm(t *testing.T) {
-	tests := []struct {
-		name  string
-		lemma string
-		pos   dictionary.POS
-		want  string
-	}{
-		{name: "verb", lemma: "abandon", pos: dictionary.POSVerb, want: "to abandon"},
-		{name: "adjective", lemma: "laconic", pos: dictionary.POSAdjective, want: "laconic (adj.)"},
-		{name: "adverb", lemma: "tersely", pos: dictionary.POSAdverb, want: "tersely (adv.)"},
-		{name: "consonant noun", lemma: "conundrum", pos: dictionary.POSNoun, want: "a conundrum"},
-		{name: "vowel noun a", lemma: "aberration", pos: dictionary.POSNoun, want: "an aberration"},
-		{name: "vowel noun e", lemma: "epiphany", pos: dictionary.POSNoun, want: "an epiphany"},
-		{name: "vowel noun i", lemma: "illusion", pos: dictionary.POSNoun, want: "an illusion"},
-		{name: "vowel noun o", lemma: "omen", pos: dictionary.POSNoun, want: "an omen"},
-		{name: "short u vowel sound noun", lemma: "umbrella", pos: dictionary.POSNoun, want: "an umbrella"},
-		{name: "silent h noun hour", lemma: "hour", pos: dictionary.POSNoun, want: "an hour"},
-		{name: "silent h noun heir", lemma: "heir", pos: dictionary.POSNoun, want: "an heir"},
-		{name: "silent h noun heirloom", lemma: "heirloom", pos: dictionary.POSNoun, want: "an heirloom"},
-		{name: "silent h noun honor", lemma: "honor", pos: dictionary.POSNoun, want: "an honor"},
-		{name: "silent h noun honour", lemma: "honour", pos: dictionary.POSNoun, want: "an honour"},
-		{name: "pronounced h noun house", lemma: "house", pos: dictionary.POSNoun, want: "a house"},
-		{name: "you-sound u noun unit", lemma: "unit", pos: dictionary.POSNoun, want: "a unit"},
-		{name: "you-sound u noun union", lemma: "union", pos: dictionary.POSNoun, want: "a union"},
-		{name: "you-sound u noun uniform", lemma: "uniform", pos: dictionary.POSNoun, want: "a uniform"},
-		{name: "you-sound u noun university", lemma: "university", pos: dictionary.POSNoun, want: "a university"},
-		{name: "you-sound u noun utensil", lemma: "utensil", pos: dictionary.POSNoun, want: "a utensil"},
-		{name: "you-sound u noun usurper", lemma: "usurper", pos: dictionary.POSNoun, want: "a usurper"},
-		{name: "you-sound eu noun eulogy", lemma: "eulogy", pos: dictionary.POSNoun, want: "a eulogy"},
-		{name: "you-sound eu noun euphemism", lemma: "euphemism", pos: dictionary.POSNoun, want: "a euphemism"},
-		{name: "w-sound one noun one-off", lemma: "one-off", pos: dictionary.POSNoun, want: "a one-off"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := dictionary.FormatPromptForm(tc.lemma, tc.pos)
-			if got != tc.want {
-				t.Errorf("FormatPromptForm(%q, %q) = %q, want %q", tc.lemma, tc.pos, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestMapPOSTag(t *testing.T) {
 	openCases := []struct {
 		tag     string
@@ -146,9 +103,6 @@ func TestLookupSenseAggregationAndMissingLTTolerance(t *testing.T) {
 	if res.Lemma != "polysemous" || res.POS != dictionary.POSAdjective {
 		t.Errorf("got (%q, %q), want (polysemous, adjective)", res.Lemma, res.POS)
 	}
-	if res.PromptForm != "polysemous (adj.)" {
-		t.Errorf("got PromptForm %q, want %q", res.PromptForm, "polysemous (adj.)")
-	}
 	wantFull := "1. having multiple meanings\n2. open to more than one interpretation"
 	if res.FullDefinition != wantFull {
 		t.Errorf("got FullDefinition %q, want %q", res.FullDefinition, wantFull)
@@ -167,8 +121,8 @@ func TestLookupSenseAggregationAndMissingLTTolerance(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected Lookup(defenestrated, VBD) to succeed even without LT translation")
 	}
-	if resNoLT.Lemma != "defenestrate" || resNoLT.PromptForm != "to defenestrate" {
-		t.Errorf("got (%q, %q), want (defenestrate, to defenestrate)", resNoLT.Lemma, resNoLT.PromptForm)
+	if resNoLT.Lemma != "defenestrate" || resNoLT.POS != dictionary.POSVerb {
+		t.Errorf("got (%q, %q), want (defenestrate, verb)", resNoLT.Lemma, resNoLT.POS)
 	}
 	if resNoLT.FullDefinition != "1. throw out of a window" {
 		t.Errorf("got FullDefinition %q, want %q", resNoLT.FullDefinition, "1. throw out of a window")
@@ -190,23 +144,22 @@ func TestDefaultOfflineDictionaryLookup(t *testing.T) {
 			posTag     string
 			wantLemma  string
 			wantPOS    dictionary.POS
-			wantPrompt string
 		}{
-			{surface: "running", posTag: "VBG", wantLemma: "run", wantPOS: dictionary.POSVerb, wantPrompt: "to run"},
-			{surface: "ran", posTag: "VBD", wantLemma: "run", wantPOS: dictionary.POSVerb, wantPrompt: "to run"},
-			{surface: "runs", posTag: "NNS", wantLemma: "run", wantPOS: dictionary.POSNoun, wantPrompt: "a run"},
-			{surface: "runs", posTag: "VBZ", wantLemma: "run", wantPOS: dictionary.POSVerb, wantPrompt: "to run"},
-			{surface: "leaves", posTag: "NNS", wantLemma: "leaf", wantPOS: dictionary.POSNoun, wantPrompt: "a leaf"},
-			{surface: "leaves", posTag: "VBZ", wantLemma: "leave", wantPOS: dictionary.POSVerb, wantPrompt: "to leave"},
-			{surface: "left", posTag: "JJ", wantLemma: "left", wantPOS: dictionary.POSAdjective, wantPrompt: "left (adj.)"},
-			{surface: "left", posTag: "VBD", wantLemma: "leave", wantPOS: dictionary.POSVerb, wantPrompt: "to leave"},
-			{surface: "rose", posTag: "NN", wantLemma: "rose", wantPOS: dictionary.POSNoun, wantPrompt: "a rose"},
-			{surface: "rose", posTag: "VBD", wantLemma: "rise", wantPOS: dictionary.POSVerb, wantPrompt: "to rise"},
-			{surface: "saw", posTag: "NN", wantLemma: "saw", wantPOS: dictionary.POSNoun, wantPrompt: "a saw"},
-			{surface: "saw", posTag: "VBD", wantLemma: "see", wantPOS: dictionary.POSVerb, wantPrompt: "to see"},
-			{surface: "wolves", posTag: "NNS", wantLemma: "wolf", wantPOS: dictionary.POSNoun, wantPrompt: "a wolf"},
-			{surface: "analyses", posTag: "NNS", wantLemma: "analysis", wantPOS: dictionary.POSNoun, wantPrompt: "an analysis"},
-			{surface: "abolished", posTag: "VBN", wantLemma: "abolish", wantPOS: dictionary.POSVerb, wantPrompt: "to abolish"},
+			{surface: "running", posTag: "VBG", wantLemma: "run", wantPOS: dictionary.POSVerb},
+			{surface: "ran", posTag: "VBD", wantLemma: "run", wantPOS: dictionary.POSVerb},
+			{surface: "runs", posTag: "NNS", wantLemma: "run", wantPOS: dictionary.POSNoun},
+			{surface: "runs", posTag: "VBZ", wantLemma: "run", wantPOS: dictionary.POSVerb},
+			{surface: "leaves", posTag: "NNS", wantLemma: "leaf", wantPOS: dictionary.POSNoun},
+			{surface: "leaves", posTag: "VBZ", wantLemma: "leave", wantPOS: dictionary.POSVerb},
+			{surface: "left", posTag: "JJ", wantLemma: "left", wantPOS: dictionary.POSAdjective},
+			{surface: "left", posTag: "VBD", wantLemma: "leave", wantPOS: dictionary.POSVerb},
+			{surface: "rose", posTag: "NN", wantLemma: "rose", wantPOS: dictionary.POSNoun},
+			{surface: "rose", posTag: "VBD", wantLemma: "rise", wantPOS: dictionary.POSVerb},
+			{surface: "saw", posTag: "NN", wantLemma: "saw", wantPOS: dictionary.POSNoun},
+			{surface: "saw", posTag: "VBD", wantLemma: "see", wantPOS: dictionary.POSVerb},
+			{surface: "wolves", posTag: "NNS", wantLemma: "wolf", wantPOS: dictionary.POSNoun},
+			{surface: "analyses", posTag: "NNS", wantLemma: "analysis", wantPOS: dictionary.POSNoun},
+			{surface: "abolished", posTag: "VBN", wantLemma: "abolish", wantPOS: dictionary.POSVerb},
 		}
 
 		for _, tc := range cases {
@@ -214,9 +167,9 @@ func TestDefaultOfflineDictionaryLookup(t *testing.T) {
 			if !ok {
 				t.Fatalf("Lookup(%q, %q) returned false, want true", tc.surface, tc.posTag)
 			}
-			if res.Lemma != tc.wantLemma || res.POS != tc.wantPOS || res.PromptForm != tc.wantPrompt {
-				t.Errorf("Lookup(%q, %q) = (%q, %q, %q), want (%q, %q, %q)",
-					tc.surface, tc.posTag, res.Lemma, res.POS, res.PromptForm, tc.wantLemma, tc.wantPOS, tc.wantPrompt)
+			if res.Lemma != tc.wantLemma || res.POS != tc.wantPOS {
+				t.Errorf("Lookup(%q, %q) = (%q, %q), want (%q, %q)",
+					tc.surface, tc.posTag, res.Lemma, res.POS, tc.wantLemma, tc.wantPOS)
 			}
 		}
 	})
@@ -315,8 +268,8 @@ func TestDefaultOfflineDictionaryLookup(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected package-level Lookup(abandoning, VBG) to succeed")
 		}
-		if res.Lemma != "abandon" || res.POS != dictionary.POSVerb || res.PromptForm != "to abandon" {
-			t.Errorf("got (%q, %q, %q), want (abandon, verb, to abandon)", res.Lemma, res.POS, res.PromptForm)
+		if res.Lemma != "abandon" || res.POS != dictionary.POSVerb {
+			t.Errorf("got (%q, %q), want (abandon, verb)", res.Lemma, res.POS)
 		}
 		if len(res.Senses) < 2 {
 			t.Errorf("expected multiple senses for abandon (verb), got %d", len(res.Senses))

@@ -818,7 +818,7 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
                 }}
               >
                 <div>
-                  <strong style={{ fontSize: '1.15rem' }}>{item.prompt_form}</strong>
+                  <strong style={{ fontSize: '1.15rem' }}>{item.lemma}</strong>
                   <span
                     style={{
                       marginLeft: '0.5rem',
@@ -1338,7 +1338,7 @@ function BookQuizView({
               >
                 {currentItem.pos}
               </span>
-              <strong style={{ fontSize: '1.5rem' }}>{currentItem.prompt_form}</strong>
+              <strong style={{ fontSize: '1.5rem' }}>{currentItem.lemma}</strong>
             </div>
 
             {phase === 'prompt' && (

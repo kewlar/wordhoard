@@ -320,13 +320,13 @@ func TestIngestExtractsLearnableLexemesAndFiltersNoise(t *testing.T) {
 	}
 
 	// obfuscate has lowest zipf (1.8 -> rarity 3.2) and highest occurrences (2 -> salience ln(3))
-	if vocab.Items[0].Lemma != "obfuscate" || vocab.Items[0].PromptForm != "to obfuscate" || vocab.Items[0].OccurrenceCount != 2 {
+	if vocab.Items[0].Lemma != "obfuscate" || vocab.Items[0].OccurrenceCount != 2 {
 		t.Errorf("expected top item to be 'to obfuscate' with count=2, got %+v", vocab.Items[0])
 	}
-	if vocab.Items[1].Lemma != "laconic" || vocab.Items[1].PromptForm != "laconic (adj.)" || vocab.Items[1].OccurrenceCount != 1 {
+	if vocab.Items[1].Lemma != "laconic" || vocab.Items[1].OccurrenceCount != 1 {
 		t.Errorf("expected second item to be 'laconic (adj.)' with count=1, got %+v", vocab.Items[1])
 	}
-	if vocab.Items[2].Lemma != "conundrum" || vocab.Items[2].PromptForm != "a conundrum" || vocab.Items[2].OccurrenceCount != 1 {
+	if vocab.Items[2].Lemma != "conundrum" || vocab.Items[2].OccurrenceCount != 1 {
 		t.Errorf("expected third item to be 'a conundrum' with count=1, got %+v", vocab.Items[2])
 	}
 }

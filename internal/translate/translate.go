@@ -28,7 +28,6 @@ type Request struct {
 	ID             int64  `json:"id"`
 	Lemma          string `json:"lemma"`
 	POS            string `json:"pos"`
-	PromptForm     string `json:"prompt_form"`
 	FullDefinition string `json:"full_definition"`
 }
 
@@ -223,7 +222,7 @@ func parseDotEnvFile(path string) (map[string]string, error) {
 }
 
 const systemPromptInstruction = `You are an expert English-to-Lithuanian lexicographer.
-For each provided English lexeme, return 1 to 5 concise, natural Lithuanian (lt) dictionary translations that match the exact Part of Speech (pos / prompt_form) and the senses in full_definition.
+For each provided English lexeme, return 1 to 5 concise, natural Lithuanian (lt) dictionary translations that match the exact Part of Speech (pos) and the senses in full_definition.
 Use canonical dictionary forms in Lithuanian:
 - verbs: infinitive (bendratis, e.g., "temdyti", "bėgti")
 - nouns: nominative singular (vienaskaitos vardininkas, e.g., "mįslė")
@@ -472,7 +471,7 @@ func (d *deepLTranslator) TranslateBatch(ctx context.Context, items []Request) (
 
 	endpoint := fmt.Sprintf("%s/v2/translate", d.baseURL)
 	for _, item := range items {
-		contextStr := fmt.Sprintf("Part of Speech: %s (%s). Definition: %s", item.POS, item.PromptForm, item.FullDefinition)
+		contextStr := fmt.Sprintf("Part of Speech: %s. Definition: %s", item.POS, item.FullDefinition)
 		reqBody := map[string]any{
 			"text":        []string{item.Lemma},
 			"source_lang": "EN",

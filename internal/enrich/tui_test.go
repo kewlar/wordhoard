@@ -44,8 +44,8 @@ func TestProgressModelUpdatesViewAndQuitsWhenFinished(t *testing.T) {
 
 func TestRunTUIPrintsPlainSummaryWhenNotATerminal(t *testing.T) {
 	store, _ := seedStore(t, []db.LexemeInput{
-		{Lemma: "laconic", POS: "adjective", PromptForm: "laconic (adj.)"},
-		{Lemma: "obdurate", POS: "adjective", PromptForm: "obdurate (adj.)"},
+		{Lemma: "laconic", POS: "adjective"},
+		{Lemma: "obdurate", POS: "adjective"},
 	})
 	tr := &fakeTranslator{answers: map[string][]string{"laconic": {"lakoniškas"}}}
 

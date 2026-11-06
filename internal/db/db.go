@@ -60,7 +60,6 @@ type ExcerptInput struct {
 type LexemeInput struct {
 	Lemma            string
 	POS              string
-	PromptForm       string
 	CEFRLevel        string
 	GlobalZipfFreq   float64
 	FullDefinition   string
@@ -74,7 +73,6 @@ type LexemeEntry struct {
 	ID               int64     `json:"id"`
 	Lemma            string    `json:"lemma"`
 	POS              string    `json:"pos"`
-	PromptForm       string    `json:"prompt_form"`
 	CEFRLevel        string    `json:"cefr_level"`
 	ObscurityScore   float64   `json:"obscurity_score"`
 	GlobalRarity     float64   `json:"global_rarity"`
@@ -221,7 +219,6 @@ CREATE TABLE IF NOT EXISTS lexemes (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	lemma TEXT NOT NULL,
 	pos TEXT NOT NULL,
-	prompt_form TEXT NOT NULL,
 	cefr_level TEXT,
 	global_zipf_freq REAL NOT NULL DEFAULT 0,
 	full_definition TEXT NOT NULL DEFAULT '',
@@ -270,22 +267,39 @@ CREATE TABLE IF NOT EXISTS lexeme_sources (
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
 	}
-	return s.addColumnIfMissing("lexemes", "pre_attempt_mastery_level", "INTEGER")
+	if err := s.addColumnIfMissing("lexemes", "pre_attempt_mastery_level", "INTEGER"); err != nil {
+		return err
+	}
+	return s.dropColumnIfPresent("lexemes", "prompt_form")
+}
+
+// dropColumnIfPresent upgrades databases created while a since-removed column
+// was still part of the CREATE TABLE schema.
+func (s *Store) dropColumnIfPresent(table, column string) error {
+	present, err := s.hasColumn(table, column)
+	if err != nil || !present {
+		return err
+	}
+	_, err = s.db.Exec(fmt.Sprintf(`ALTER TABLE %s DROP COLUMN %s`, table, column))
+	return err
+}
+
+func (s *Store) hasColumn(table, column string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column,
+	).Scan(&count)
+	return count > 0, err
 }
 
 // addColumnIfMissing upgrades databases created before a column was added to
 // the CREATE TABLE schema.
 func (s *Store) addColumnIfMissing(table, column, decl string) error {
-	var count int
-	if err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column,
-	).Scan(&count); err != nil {
+	present, err := s.hasColumn(table, column)
+	if err != nil || present {
 		return err
 	}
-	if count > 0 {
-		return nil
-	}
-	_, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, decl))
+	_, err = s.db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, decl))
 	return err
 }
 
@@ -479,11 +493,10 @@ func (s *Store) SaveBookLexemes(bookID int64, items []LexemeInput) error {
 
 	upsertLexemeStmt, err := tx.Prepare(`
 		INSERT INTO lexemes (
-			lemma, pos, prompt_form, cefr_level, global_zipf_freq,
+			lemma, pos, cefr_level, global_zipf_freq,
 			full_definition, short_definitions_json, translations_lt_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(lemma, pos) DO UPDATE SET
-			prompt_form = excluded.prompt_form,
 			cefr_level = excluded.cefr_level,
 			global_zipf_freq = excluded.global_zipf_freq,
 			full_definition = excluded.full_definition,
@@ -546,7 +559,6 @@ func (s *Store) SaveBookLexemes(bookID int64, items []LexemeInput) error {
 		if _, err := upsertLexemeStmt.Exec(
 			item.Lemma,
 			item.POS,
-			item.PromptForm,
 			item.CEFRLevel,
 			item.GlobalZipfFreq,
 			item.FullDefinition,
@@ -612,7 +624,6 @@ func scanLexemeEntry(scanner rowScanner) (LexemeEntry, error) {
 		&entry.ID,
 		&entry.Lemma,
 		&entry.POS,
-		&entry.PromptForm,
 		&entry.CEFRLevel,
 		&entry.GlobalRarity,
 		&entry.LibraryIDF,
@@ -945,7 +956,6 @@ func (s *Store) ListBookVocabulary(bookID int64, filter VocabularyFilter) (Vocab
 			l.id,
 			l.lemma,
 			l.pos,
-			l.prompt_form,
 			COALESCE(l.cefr_level, ''),
 			max(0.0, 5.0 - l.global_zipf_freq) AS global_rarity,
 			ln(1.0 + CAST(tb.total_books AS REAL) / CAST(lc.books_with_lexeme AS REAL)) AS library_idf,
@@ -1030,7 +1040,6 @@ func (s *Store) GetLexeme(lexemeID int64) (*LexemeEntry, error) {
 			l.id,
 			l.lemma,
 			l.pos,
-			l.prompt_form,
 			COALESCE(l.cefr_level, ''),
 			max(0.0, 5.0 - l.global_zipf_freq) AS global_rarity,
 			CASE WHEN lc.books_with_lexeme > 0
@@ -1064,7 +1073,6 @@ func (s *Store) GetLexeme(lexemeID int64) (*LexemeEntry, error) {
 		&entry.ID,
 		&entry.Lemma,
 		&entry.POS,
-		&entry.PromptForm,
 		&entry.CEFRLevel,
 		&entry.GlobalRarity,
 		&entry.LibraryIDF,
@@ -1234,7 +1242,6 @@ func (s *Store) SelectQuizCandidates(bookID int64, size int) (QuizSession, error
 			l.id,
 			l.lemma,
 			l.pos,
-			l.prompt_form,
 			COALESCE(l.cefr_level, ''),
 			max(0.0, 5.0 - l.global_zipf_freq) AS global_rarity,
 			ln(1.0 + CAST(tb.total_books AS REAL) / CAST(lc.books_with_lexeme AS REAL)) AS library_idf,

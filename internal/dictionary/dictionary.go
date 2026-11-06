@@ -32,7 +32,6 @@ type Sense struct {
 type LookupResult struct {
 	Lemma            string   `json:"lemma"`
 	POS              POS      `json:"pos"`
-	PromptForm       string   `json:"prompt_form"`
 	CEFRLevel        string   `json:"cefr_level"`
 	IsCoreVocabulary bool     `json:"is_core_vocabulary"`
 	GlobalZipfFreq   float64  `json:"global_zipf_freq"`
@@ -297,7 +296,6 @@ func (d *Dictionary) Lookup(surfaceWord, posTag string) (*LookupResult, bool) {
 	return &LookupResult{
 		Lemma:            lemma,
 		POS:              pos,
-		PromptForm:       FormatPromptForm(lemma, pos),
 		CEFRLevel:        entry.cefr,
 		IsCoreVocabulary: isCoreCEFR(entry.cefr),
 		GlobalZipfFreq:   entry.zipf,
@@ -523,101 +521,6 @@ func containsString(slice []string, val string) bool {
 		}
 	}
 	return false
-}
-
-var silentHPrefixes = []string{
-	"hour",
-	"heir",
-	"honest",
-	"honor",
-	"honour",
-	"homage",
-	"herb",
-}
-
-var consonantSoundPrefixes = []string{
-	"uni",
-	"use",
-	"usu",
-	"usa",
-	"usi",
-	"ute",
-	"uti",
-	"uto",
-	"ubu",
-	"uku",
-	"uru",
-	"eul",
-	"eup",
-	"eur",
-	"eut",
-	"euc",
-	"eug",
-	"eun",
-	"one-",
-	"once",
-}
-
-var anUniExceptions = []string{
-	"unidentif",
-	"unimagin",
-	"unimport",
-	"uninform",
-	"uninhabit",
-	"uniniti",
-	"uninspir",
-	"unintell",
-	"unintend",
-	"uninterest",
-	"uninterr",
-	"uninvit",
-	"unissued",
-}
-
-func FormatPromptForm(lemma string, pos POS) string {
-	w := strings.ToLower(strings.TrimSpace(lemma))
-	switch pos {
-	case POSVerb:
-		return "to " + w
-	case POSAdjective:
-		return w + " (adj.)"
-	case POSAdverb:
-		return w + " (adv.)"
-	case POSNoun:
-		if usesIndefiniteArticleAn(w) {
-			return "an " + w
-		}
-		return "a " + w
-	default:
-		return w
-	}
-}
-
-func usesIndefiniteArticleAn(word string) bool {
-	if word == "" {
-		return false
-	}
-	for _, p := range silentHPrefixes {
-		if strings.HasPrefix(word, p) {
-			return true
-		}
-	}
-	for _, p := range anUniExceptions {
-		if strings.HasPrefix(word, p) {
-			return true
-		}
-	}
-	for _, p := range consonantSoundPrefixes {
-		if word == "one" || strings.HasPrefix(word, p) {
-			return false
-		}
-	}
-	switch word[0] {
-	case 'a', 'e', 'i', 'o', 'u':
-		return true
-	default:
-		return false
-	}
 }
 
 var closedClassTags = map[string]bool{

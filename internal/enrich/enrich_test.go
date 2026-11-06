@@ -60,10 +60,10 @@ func lexemeID(t *testing.T, store *db.Store, lemma string) int64 {
 
 func TestRunTranslatesCandidatesInBatchesAndPersistsOnlineSource(t *testing.T) {
 	store, _ := seedStore(t, []db.LexemeInput{
-		{Lemma: "laconic", POS: "adjective", PromptForm: "laconic (adj.)", FullDefinition: "using few words"},
-		{Lemma: "obdurate", POS: "adjective", PromptForm: "obdurate (adj.)", FullDefinition: "stubborn"},
-		{Lemma: "perfidy", POS: "noun", PromptForm: "a perfidy", FullDefinition: "treachery"},
-		{Lemma: "known", POS: "adjective", PromptForm: "known (adj.)", TranslationsLT: []string{"žinomas"}},
+		{Lemma: "laconic", POS: "adjective", FullDefinition: "using few words"},
+		{Lemma: "obdurate", POS: "adjective", FullDefinition: "stubborn"},
+		{Lemma: "perfidy", POS: "noun", FullDefinition: "treachery"},
+		{Lemma: "known", POS: "adjective", TranslationsLT: []string{"žinomas"}},
 	})
 	tr := &fakeTranslator{answers: map[string][]string{
 		"laconic":  {"lakoniškas"},
@@ -82,7 +82,7 @@ func TestRunTranslatesCandidatesInBatchesAndPersistsOnlineSource(t *testing.T) {
 	if len(tr.batches) != 2 || len(tr.batches[0]) != 2 || len(tr.batches[1]) != 1 {
 		t.Fatalf("expected batches of sizes [2 1], got %d batches: %+v", len(tr.batches), tr.batches)
 	}
-	if tr.batches[0][0].Lemma != "laconic" || tr.batches[0][0].FullDefinition != "using few words" || tr.batches[0][0].PromptForm != "laconic (adj.)" {
+	if tr.batches[0][0].Lemma != "laconic" || tr.batches[0][0].FullDefinition != "using few words" {
 		t.Errorf("unexpected request payload: %+v", tr.batches[0][0])
 	}
 	if summary.Total != 3 || summary.Translated != 3 || summary.Failed != 0 {
@@ -118,8 +118,8 @@ func TestRunTranslatesCandidatesInBatchesAndPersistsOnlineSource(t *testing.T) {
 
 func TestRunPersistsEachBatchBeforeTheNextAndCountsFailedBatches(t *testing.T) {
 	store, _ := seedStore(t, []db.LexemeInput{
-		{Lemma: "laconic", POS: "adjective", PromptForm: "laconic (adj.)"},
-		{Lemma: "obdurate", POS: "adjective", PromptForm: "obdurate (adj.)"},
+		{Lemma: "laconic", POS: "adjective"},
+		{Lemma: "obdurate", POS: "adjective"},
 	})
 	tr := &fakeTranslator{failOn: 2, answers: map[string][]string{
 		"laconic":  {"lakoniškas"},
@@ -155,9 +155,9 @@ func TestRunPersistsEachBatchBeforeTheNextAndCountsFailedBatches(t *testing.T) {
 
 func TestRunRespectsBookAndLimit(t *testing.T) {
 	store, bookID := seedStore(t, []db.LexemeInput{
-		{Lemma: "laconic", POS: "adjective", PromptForm: "laconic (adj.)"},
-		{Lemma: "obdurate", POS: "adjective", PromptForm: "obdurate (adj.)"},
-		{Lemma: "perfidy", POS: "noun", PromptForm: "a perfidy"},
+		{Lemma: "laconic", POS: "adjective"},
+		{Lemma: "obdurate", POS: "adjective"},
+		{Lemma: "perfidy", POS: "noun"},
 	})
 	tr := &fakeTranslator{answers: map[string][]string{}}
 

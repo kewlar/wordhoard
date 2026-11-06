@@ -14,9 +14,6 @@ _Avoid_: Ebook, file, document
 A canonical dictionary entry defined by a base word (**Lemma**) and an open-class **Part of Speech (POS)** (`noun`, `verb`, `adjective`, or `adverb`—e.g., `run (verb)` vs. `run (noun)`). The fundamental unit of learning, scoring, and mastery across the entire library.
 _Avoid_: Word, token, vocabulary item
 
-**Prompt Form**:
-The display string shown to the user for a **Lexeme** to disambiguate its Part of Speech—formatted as `"to <lemma>"` for verbs, `"a/an <lemma>"` for nouns, `"<lemma> (adj.)"` for adjectives, and `"<lemma> (adv.)"` for adverbs.
-
 **Occurrence**:
 A single appearance of a **Lexeme** in a specific **Book**, capturing the inflected surface word as it appeared in the text and the surrounding **Excerpt**.
 _Avoid_: Match, hit, instance
@@ -64,4 +61,4 @@ One of four mutually exclusive learning states derived from **Known Status** and
 - **Known**: `known = true`
 
 **Quiz**:
-A keyboard-first interactive training session for a specific **Book** held in frontend state that selects a fixed-size batch (default 20) of unmastered **Lexemes** prioritized by **Mastery Level** and **Obscurity Score**, presenting each **Prompt Form** one at a time. Incorrectly answered lexemes are moved to the back of the session queue and repeated until every selected lexeme has been answered correctly at least once in that session.
+A keyboard-first interactive training session for a specific **Book** held in frontend state that selects a fixed-size batch (default 20) of unmastered **Lexemes** prioritized by **Mastery Level** and **Obscurity Score**, presenting each **Lexeme** one at a time as its bare **Lemma** labelled with its Part of Speech. Incorrectly answered lexemes are moved to the back of the session queue and repeated until every selected lexeme has been answered correctly at least once in that session.

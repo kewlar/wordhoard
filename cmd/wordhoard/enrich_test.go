@@ -47,7 +47,7 @@ func seedCLIStore(t *testing.T, dbPath string) (book1, book2 int64) {
 		}
 		items := make([]db.LexemeInput, len(lemmas))
 		for i, l := range lemmas {
-			items[i] = db.LexemeInput{Lemma: l, POS: "noun", PromptForm: "a " + l}
+			items[i] = db.LexemeInput{Lemma: l, POS: "noun"}
 		}
 		if err := store.SaveBookLexemes(b.ID, items); err != nil {
 			t.Fatalf("SaveBookLexemes: %v", err)
