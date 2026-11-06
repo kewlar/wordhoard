@@ -9,6 +9,18 @@ import {
   type VocabularyPage,
   type VocabularyQuery,
 } from './api';
+import {
+  advance,
+  applyEdit,
+  currentLexeme,
+  isFinishing as quizIsFinishing,
+  progressPercent as quizProgressPercent,
+  setKnown,
+  startQuiz,
+  submitAnswer,
+  type Quiz,
+  type QuizTransition,
+} from './quiz';
 
 export interface AppProps {
   apiClient?: ApiClient;
@@ -30,46 +42,6 @@ function parseRoute(pathname: string): Route {
     return { kind: 'quiz', bookId: Number(quizMatch[1]) };
   }
   return { kind: 'books' };
-}
-
-export function normalizeQuizAnswer(raw: string, stripEnglishPrefix = true): string {
-  const cleaned = raw
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!cleaned) {
-    return '';
-  }
-  if (!stripEnglishPrefix) {
-    return cleaned;
-  }
-  return cleaned.replace(/^(?:to|a|an)\s+/i, '').trim();
-}
-
-export function evaluateQuizAnswer(
-  userInput: string,
-  lexeme: Pick<LexemeEntry, 'translations_lt' | 'short_definitions'>
-): boolean {
-  const normalizedLTInput = normalizeQuizAnswer(userInput, false);
-  if (normalizedLTInput) {
-    const ltMatched = (lexeme.translations_lt ?? []).some((candidate) => {
-      const normalizedCandidate = normalizeQuizAnswer(candidate, false);
-      return normalizedCandidate.length > 0 && normalizedCandidate === normalizedLTInput;
-    });
-    if (ltMatched) {
-      return true;
-    }
-  }
-
-  const normalizedENInput = normalizeQuizAnswer(userInput, true);
-  if (!normalizedENInput) {
-    return false;
-  }
-  return (lexeme.short_definitions ?? []).some((candidate) => {
-    const normalizedCandidate = normalizeQuizAnswer(candidate, true);
-    return normalizedCandidate.length > 0 && normalizedCandidate === normalizedENInput;
-  });
 }
 
 export function shuffleQuizBatch(
@@ -1043,39 +1015,30 @@ function BookQuizView({
   shuffleQuizItems,
 }: BookQuizViewProps) {
   const [book, setBook] = useState<BookSummary | undefined>(undefined);
-  const [queue, setQueue] = useState<LexemeEntry[]>([]);
-  const [quizSize, setQuizSize] = useState(0);
-  const [correctCount, setCorrectCount] = useState(0);
+  const [quiz, setQuiz] = useState<Quiz>(() => startQuiz([]));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [phase, setPhase] = useState<'prompt' | 'reveal'>('prompt');
   const [answerInput, setAnswerInput] = useState('');
-  const [submittedAnswer, setSubmittedAnswer] = useState('');
-  const [lastCorrect, setLastCorrect] = useState(false);
-  const [wasFirstAttemptOnReveal, setWasFirstAttemptOnReveal] = useState(false);
   const [excerptOpen, setExcerptOpen] = useState(false);
   const [editingReveal, setEditingReveal] = useState(false);
 
-  const attemptedLexemeIdsRef = useRef<Set<number>>(new Set());
+  // Handlers that resume after an await must transition the latest Quiz.
+  const quizRef = useRef(quiz);
+  quizRef.current = quiz;
   const answerInputRef = useRef<HTMLInputElement | null>(null);
   const nextButtonRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const startQuiz = apiClient.startBookQuiz ?? defaultApiClient.startBookQuiz!;
+    const fetchQuizSession = apiClient.startBookQuiz ?? defaultApiClient.startBookQuiz!;
     setLoading(true);
-    attemptedLexemeIdsRef.current = new Set();
 
-    startQuiz(bookId)
+    fetchQuizSession(bookId)
       .then((session) => {
         if (!cancelled) {
-          const shuffled = shuffleQuizItems(session.items ?? []);
           setBook(session.book);
-          setQueue(shuffled);
-          setQuizSize(shuffled.length);
-          setCorrectCount(0);
-          setPhase('prompt');
+          setQuiz(startQuiz(shuffleQuizItems(session.items ?? [])));
           setAnswerInput('');
           setError(null);
         }
@@ -1096,7 +1059,8 @@ function BookQuizView({
     };
   }, [apiClient, bookId, shuffleQuizItems]);
 
-  const currentItem = queue[0];
+  const currentItem = currentLexeme(quiz);
+  const { phase, size: quizSize, correctCount, submittedAnswer, lastCorrect } = quiz;
 
   useEffect(() => {
     if (!loading && currentItem && phase === 'prompt') {
@@ -1110,32 +1074,33 @@ function BookQuizView({
     }
   }, [loading, currentItem, phase, editingReveal]);
 
+  const apply = ({ quiz: next, effects }: QuizTransition) => {
+    quizRef.current = next;
+    setQuiz(next);
+    for (const effect of effects) {
+      if (effect.kind === 'recordAttempt') {
+        const recordAttempt =
+          apiClient.recordLexemeAttempt ?? defaultApiClient.recordLexemeAttempt!;
+        void recordAttempt(
+          effect.lexemeId,
+          effect.correction
+            ? { first_attempt_correct: effect.firstAttemptCorrect, correction: true }
+            : { first_attempt_correct: effect.firstAttemptCorrect }
+        );
+      } else {
+        onNavigate(`/books/${bookId}/vocabulary`);
+      }
+    }
+  };
+
   const handleSubmitPrompt = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentItem || phase !== 'prompt') {
       return;
     }
-
-    const isCorrect = evaluateQuizAnswer(answerInput, currentItem);
-    const isFirstAttempt = !attemptedLexemeIdsRef.current.has(currentItem.id);
-
-    if (isFirstAttempt) {
-      attemptedLexemeIdsRef.current.add(currentItem.id);
-      const recordAttempt =
-        apiClient.recordLexemeAttempt ?? defaultApiClient.recordLexemeAttempt!;
-      void recordAttempt(currentItem.id, { first_attempt_correct: isCorrect });
-    }
-
-    if (isCorrect) {
-      setCorrectCount((c) => c + 1);
-    }
-
-    setSubmittedAnswer(answerInput);
-    setLastCorrect(isCorrect);
-    setWasFirstAttemptOnReveal(isFirstAttempt);
+    apply(submitAnswer(quiz, answerInput));
     setExcerptOpen(false);
     setEditingReveal(false);
-    setPhase('reveal');
   };
 
   const handleSaveQuizEdit = async (fields: {
@@ -1164,28 +1129,7 @@ function BookQuizView({
           ? res.full_definition
           : fields.full_definition,
     };
-
-    const nowMatches =
-      !lastCorrect && evaluateQuizAnswer(submittedAnswer, updatedItem);
-
-    setQueue((prev) => {
-      const mapped = prev.map((it) => (it.id === currentItem.id ? updatedItem : it));
-      if (nowMatches) {
-        return mapped.filter((it, idx) => idx === 0 || it.id !== currentItem.id);
-      }
-      return mapped;
-    });
-
-    if (nowMatches) {
-      setLastCorrect(true);
-      setCorrectCount((c) => c + 1);
-      if (wasFirstAttemptOnReveal) {
-        setWasFirstAttemptOnReveal(false);
-        const recordAttempt =
-          apiClient.recordLexemeAttempt ?? defaultApiClient.recordLexemeAttempt!;
-        void recordAttempt(currentItem.id, { first_attempt_correct: true, correction: true });
-      }
-    }
+    apply(applyEdit(quizRef.current, updatedItem));
 
     setEditingReveal(false);
     nextButtonRef.current?.focus();
@@ -1198,9 +1142,7 @@ function BookQuizView({
     const patchFn = apiClient.patchLexeme ?? defaultApiClient.patchLexeme!;
     const nextKnown = !currentItem.known;
     await patchFn(currentItem.id, { known: nextKnown });
-    setQueue((prev) =>
-      prev.map((it) => (it.id === currentItem.id ? { ...it, known: nextKnown } : it))
-    );
+    apply(setKnown(quizRef.current, currentItem.id, nextKnown));
     if (phase === 'reveal') {
       nextButtonRef.current?.focus();
     } else {
@@ -1212,32 +1154,14 @@ function BookQuizView({
     if (!currentItem || phase !== 'reveal') {
       return;
     }
-
-    if (lastCorrect || currentItem.known) {
-      if (!lastCorrect && currentItem.known) {
-        setCorrectCount((c) => c + 1);
-      }
-      const remaining = queue.slice(1);
-      if (remaining.length === 0) {
-        onNavigate(`/books/${bookId}/vocabulary`);
-        return;
-      }
-      setQueue(remaining);
-    } else {
-      const reQueued = [...queue.slice(1), currentItem];
-      setQueue(reQueued);
-    }
-
+    apply(advance(quiz));
     setAnswerInput('');
-    setSubmittedAnswer('');
     setExcerptOpen(false);
     setEditingReveal(false);
-    setPhase('prompt');
   };
 
-  const isFinishing =
-    phase === 'reveal' && (lastCorrect || Boolean(currentItem?.known)) && queue.length === 1;
-  const progressPercent = quizSize > 0 ? Math.round((correctCount / quizSize) * 100) : 0;
+  const isFinishing = quizIsFinishing(quiz);
+  const progressPercent = quizProgressPercent(quiz);
 
   return (
     <section>

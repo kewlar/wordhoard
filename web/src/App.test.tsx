@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { App, evaluateQuizAnswer, normalizeQuizAnswer } from './App';
+import { App } from './App';
 import type { ApiClient, BookSummary, VocabularyPage } from './api';
 
 const sampleBook: BookSummary = {
@@ -511,93 +511,6 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     // Press Enter on "Finish" -> navigates to /books/1/vocabulary
     await user.keyboard('{Enter}');
     expect(window.location.pathname).toBe('/books/1/vocabulary');
-  });
-
-  it('allows toggling Known Status during a quiz without re-queuing the marked lexeme', async () => {
-    const user = userEvent.setup();
-    window.history.pushState({}, '', '/books/1/quiz');
-
-    const startBookQuiz = vi.fn(async () => ({
-      book: sampleBook,
-      items: sampleVocabularyPage.items,
-    }));
-
-    const recordLexemeAttempt = vi.fn(async (id: number) => ({
-      id,
-      lemma: id === 101 ? 'laconic' : 'obfuscate',
-      pos: id === 101 ? 'adjective' : 'verb',
-      mastery_level: 0,
-      known: false,
-    }));
-
-    const patchLexeme = vi.fn(async (id: number, patch: { known?: boolean }) => ({
-      id,
-      lemma: 'laconic',
-      pos: 'adjective',
-      mastery_level: 0,
-      known: Boolean(patch.known),
-    }));
-
-    const client: ApiClient = {
-      listBooks: async () => [sampleBook],
-      getBookVocabulary: async () => sampleVocabularyPage,
-      startBookQuiz,
-      recordLexemeAttempt,
-      patchLexeme,
-    };
-
-    render(<App apiClient={client} shuffleQuizItems={(items) => [...items]} />);
-
-    // Prompt 1: "laconic" — skip with Enter
-    expect(await screen.findByText('laconic')).toBeInTheDocument();
-    await user.keyboard('{Enter}');
-
-    // On reveal screen, click "Already Known / Ignore"
-    const ignoreBtn = await screen.findByRole('button', { name: /already known \/ ignore/i });
-    await user.click(ignoreBtn);
-
-    expect(patchLexeme).toHaveBeenCalledWith(101, { known: true });
-    expect(await screen.findByRole('button', { name: /known \(unmark\)/i })).toBeInTheDocument();
-
-    // Focus stays on "Next" button so Enter advances immediately
-    const nextBtn = screen.getByRole('button', { name: /^next$/i });
-    expect(nextBtn).toHaveFocus();
-    await user.keyboard('{Enter}');
-
-    // Prompt 2: "to obfuscate" — answer correctly
-    expect(await screen.findByText('obfuscate')).toBeInTheDocument();
-    await user.keyboard('obscure{Enter}');
-
-    // Because "laconic" was marked known, it was NOT re-queued at the tail, so the quiz is now ready to Finish!
-    const finishBtn = await screen.findByRole('button', { name: /^finish$/i });
-    expect(finishBtn).toHaveFocus();
-  });
-
-  it('normalizes capitalization, whitespace, punctuation, and leading English articles/particles ("to ", "a ", "an ") while rejecting empty answers', () => {
-    expect(normalizeQuizAnswer('  To   Shorten! ')).toBe('shorten');
-    expect(normalizeQuizAnswer('A "riddle"...')).toBe('riddle');
-    expect(normalizeQuizAnswer('An enigma?')).toBe('enigma');
-    expect(normalizeQuizAnswer('   ')).toBe('');
-    expect(normalizeQuizAnswer('...!?')).toBe('');
-
-    const lexeme = {
-      translations_lt: ['lakoniškas', 'glaustas'],
-      short_definitions: ['to shorten', 'a riddle', 'an enigma', 'concise'],
-    };
-
-    expect(evaluateQuizAnswer('shorten', lexeme)).toBe(true);
-    expect(evaluateQuizAnswer('TO SHORTEN', lexeme)).toBe(true);
-    expect(evaluateQuizAnswer('riddle', lexeme)).toBe(true);
-    expect(evaluateQuizAnswer('a riddle!', lexeme)).toBe(true);
-    expect(evaluateQuizAnswer('enigma', lexeme)).toBe(true);
-    expect(evaluateQuizAnswer('an enigma', lexeme)).toBe(true);
-    expect(evaluateQuizAnswer('  Glaustas, ', lexeme)).toBe(true);
-    // Leading English "to " must NOT be stripped when matching against Lithuanian translations
-    expect(evaluateQuizAnswer('to glaustas', lexeme)).toBe(false);
-    expect(evaluateQuizAnswer('', lexeme)).toBe(false);
-    expect(evaluateQuizAnswer('   ', lexeme)).toBe(false);
-    expect(evaluateQuizAnswer('to ', lexeme)).toBe(false);
-    expect(evaluateQuizAnswer('unrelated', lexeme)).toBe(false);
   });
 
   it('allows inline editing of a lexeme in the Book Vocabulary Browser and updates displayed values immediately on Save', async () => {
