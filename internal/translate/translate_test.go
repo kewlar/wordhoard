@@ -129,14 +129,12 @@ func TestGeminiTranslatorTranslateBatch(t *testing.T) {
 			ID:             101,
 			Lemma:          "laconic",
 			POS:            "adjective",
-			PromptForm:     "laconic (adj.)",
 			FullDefinition: "1. Using very few words\n2. Concise to the point of seeming rude",
 		},
 		{
 			ID:             102,
 			Lemma:          "obfuscate",
 			POS:            "verb",
-			PromptForm:     "to obfuscate",
 			FullDefinition: "1. To make obscure, unclear, or unintelligible",
 		},
 	})
@@ -150,7 +148,7 @@ func TestGeminiTranslatorTranslateBatch(t *testing.T) {
 	if capturedKey != "test-gemini-key" {
 		t.Errorf("expected API key 'test-gemini-key', got %q", capturedKey)
 	}
-	for _, wantSub := range []string{"laconic", "adjective", "laconic (adj.)", "Using very few words", "obfuscate", "to obfuscate"} {
+	for _, wantSub := range []string{"laconic", "adjective", "Using very few words", "obfuscate", "verb"} {
 		if !strings.Contains(capturedBody, wantSub) {
 			t.Errorf("expected request body to include %q, got %s", wantSub, capturedBody)
 		}
@@ -233,7 +231,6 @@ func TestOpenAITranslatorTranslateBatch(t *testing.T) {
 			ID:             201,
 			Lemma:          "conundrum",
 			POS:            "noun",
-			PromptForm:     "a conundrum",
 			FullDefinition: "1. A confusing and difficult problem or question",
 		},
 	})
@@ -295,7 +292,6 @@ func TestDeepLTranslatorTranslateBatch(t *testing.T) {
 			ID:             301,
 			Lemma:          "ephemeral",
 			POS:            "adjective",
-			PromptForm:     "ephemeral (adj.)",
 			FullDefinition: "1. Lasting for a very short time",
 		},
 	})

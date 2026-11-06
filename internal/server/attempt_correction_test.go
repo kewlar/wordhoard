@@ -40,7 +40,7 @@ func TestAttemptCorrectionRestoresPreAttemptMasteryPlusOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBook: %v", err)
 	}
-	if err := store.SaveBookLexemes(book.ID, []db.LexemeInput{{Lemma: "laconic", POS: "adjective", PromptForm: "laconic (adj.)"}}); err != nil {
+	if err := store.SaveBookLexemes(book.ID, []db.LexemeInput{{Lemma: "laconic", POS: "adjective"}}); err != nil {
 		t.Fatalf("SaveBookLexemes: %v", err)
 	}
 	var lexemeID int64

@@ -29,7 +29,6 @@ const sampleVocabularyPage: VocabularyPage = {
       id: 101,
       lemma: 'laconic',
       pos: 'adjective',
-      prompt_form: 'laconic (adj.)',
       cefr_level: 'c1',
       obscurity_score: 5.197,
       global_rarity: 3.0,
@@ -67,7 +66,6 @@ const sampleVocabularyPage: VocabularyPage = {
       id: 102,
       lemma: 'obfuscate',
       pos: 'verb',
-      prompt_form: 'to obfuscate',
       cefr_level: '',
       obscurity_score: 4.585,
       global_rarity: 3.2,
@@ -158,8 +156,8 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     });
 
     // Prompt forms & POS
-    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
-    expect(screen.getByText('to obfuscate')).toBeInTheDocument();
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
+    expect(screen.getByText('obfuscate')).toBeInTheDocument();
 
     // Score & breakdown: obscurity score, global rarity, book occurrences, library book count
     expect(screen.getByText(/5\.20/)).toBeInTheDocument();
@@ -207,7 +205,6 @@ describe('Books List & Book Vocabulary Browser UI', () => {
               id: 103,
               lemma: 'conundrum',
               pos: 'noun',
-              prompt_form: 'a conundrum',
               cefr_level: '',
               obscurity_score: 4.1,
               global_rarity: 2.5,
@@ -236,12 +233,12 @@ describe('Books List & Book Vocabulary Browser UI', () => {
 
     render(<App apiClient={client} />);
 
-    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
 
     // Pagination: click Next page
     const nextBtn = screen.getByRole('button', { name: /next/i });
     await user.click(nextBtn);
-    expect(await screen.findByText('a conundrum')).toBeInTheDocument();
+    expect(await screen.findByText('conundrum')).toBeInTheDocument();
 
     // Filter by POS = verb
     const posSelect = screen.getByLabelText(/part of speech/i);
@@ -252,7 +249,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
         expect.objectContaining({ pos: 'verb', page: 1 })
       );
     });
-    expect(await screen.findByText('to obfuscate')).toBeInTheDocument();
+    expect(await screen.findByText('obfuscate')).toBeInTheDocument();
 
     // Reset POS to All and search by lemma
     await user.selectOptions(posSelect, '');
@@ -266,7 +263,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
         expect.objectContaining({ search: 'lac', page: 1 })
       );
     });
-    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
   });
 
   it('toggles "View in context" to expand and collapse book excerpts with highlighted surface words and chapter references', async () => {
@@ -280,7 +277,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
 
     render(<App apiClient={client} />);
 
-    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
 
     // Excerpts are initially collapsed
     expect(screen.queryByText('Chapter 3')).not.toBeInTheDocument();
@@ -289,7 +286,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     const toggleButtons = screen.getAllByRole('button', { name: /view in context/i });
     expect(toggleButtons.length).toBeGreaterThanOrEqual(1);
 
-    // Click to expand excerpts for the first entry ("laconic (adj.)")
+    // Click to expand excerpts for the first entry ("laconic")
     await user.click(toggleButtons[0]!);
 
     expect(screen.getByText('Chapter 3')).toBeInTheDocument();
@@ -349,7 +346,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
 
     render(<App apiClient={client} />);
 
-    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
     expect(screen.getAllByText(/mastery:\s*0\s*\/\s*5/i).length).toBeGreaterThanOrEqual(1);
 
     // Verify 4 status pills render with Unseen, Learning, Mastered active by default and Known inactive
@@ -441,8 +438,8 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(window.location.pathname).toBe('/books/1/quiz');
     expect(startBookQuiz).toHaveBeenCalledWith(1);
 
-    // Prompt 1: "laconic (adj.)"
-    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    // Prompt 1: "laconic"
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
     expect(screen.getByText('0 / 2')).toBeInTheDocument();
 
     // Answer input must be automatically focused
@@ -471,7 +468,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     // Press Enter to advance to next word ("to obfuscate")
     await user.keyboard('{Enter}');
 
-    expect(await screen.findByText('to obfuscate')).toBeInTheDocument();
+    expect(await screen.findByText('obfuscate')).toBeInTheDocument();
     const answerInput2 = screen.getByRole('textbox', { name: /your answer/i });
     expect(answerInput2).toHaveFocus();
 
@@ -490,10 +487,10 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     const nextBtn2 = screen.getByRole('button', { name: /^next$/i });
     expect(nextBtn2).toHaveFocus();
 
-    // Press Enter to advance to re-queued word ("laconic (adj.)")
+    // Press Enter to advance to re-queued word ("laconic")
     await user.keyboard('{Enter}');
 
-    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
     const answerInput3 = screen.getByRole('textbox', { name: /your answer/i });
     expect(answerInput3).toHaveFocus();
 
@@ -551,8 +548,8 @@ describe('Books List & Book Vocabulary Browser UI', () => {
 
     render(<App apiClient={client} shuffleQuizItems={(items) => [...items]} />);
 
-    // Prompt 1: "laconic (adj.)" — skip with Enter
-    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    // Prompt 1: "laconic" — skip with Enter
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
     await user.keyboard('{Enter}');
 
     // On reveal screen, click "Already Known / Ignore"
@@ -568,7 +565,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     await user.keyboard('{Enter}');
 
     // Prompt 2: "to obfuscate" — answer correctly
-    expect(await screen.findByText('to obfuscate')).toBeInTheDocument();
+    expect(await screen.findByText('obfuscate')).toBeInTheDocument();
     await user.keyboard('obscure{Enter}');
 
     // Because "laconic" was marked known, it was NOT re-queued at the tail, so the quiz is now ready to Finish!
@@ -623,9 +620,9 @@ describe('Books List & Book Vocabulary Browser UI', () => {
 
     render(<App apiClient={client} />);
 
-    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
 
-    // Click Edit on the first lexeme ("laconic (adj.)")
+    // Click Edit on the first lexeme ("laconic")
     const editButtons = screen.getAllByRole('button', { name: /^edit$/i });
     await user.click(editButtons[0]!);
 
@@ -712,8 +709,8 @@ describe('Books List & Book Vocabulary Browser UI', () => {
 
     render(<App apiClient={client} shuffleQuizItems={(items) => [...items]} />);
 
-    // Prompt 1: "laconic (adj.)"
-    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    // Prompt 1: "laconic"
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
     expect(screen.getByText('0 / 2')).toBeInTheDocument();
 
     // Submit a synonym ("trumpas") that is NOT yet in translations_lt (['lakoniškas', 'glaustas'])
@@ -763,7 +760,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
 
     // Press Enter on Next -> advances to second item ("to obfuscate")
     await user.keyboard('{Enter}');
-    expect(await screen.findByText('to obfuscate')).toBeInTheDocument();
+    expect(await screen.findByText('obfuscate')).toBeInTheDocument();
 
     // Answer second item ("to obfuscate") correctly -> since item 101 was removed from the repeat queue, the quiz is now at 2 / 2 and shows "Finish"!
     await user.keyboard('obscure{Enter}');
@@ -800,9 +797,9 @@ describe('Books List & Book Vocabulary Browser UI', () => {
 
     render(<App apiClient={client} />);
 
-    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
 
-    // Open Edit form for "laconic (adj.)"
+    // Open Edit form for "laconic"
     const editButtons = screen.getAllByRole('button', { name: /^edit$/i });
     await user.click(editButtons[0]!);
 
@@ -856,7 +853,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
 
     render(<App apiClient={client} />);
 
-    expect(await screen.findByText('laconic (adj.)')).toBeInTheDocument();
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
     await user.click(screen.getAllByRole('button', { name: /^edit$/i })[0]!);
 
     const translationsInput = screen.getByLabelText(/lithuanian translations/i) as HTMLInputElement;

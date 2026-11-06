@@ -413,7 +413,6 @@ func extractBookLexemes(chapters []epub.Chapter, dict *dictionary.Dictionary, on
 		out = append(out, db.LexemeInput{
 			Lemma:            res.Lemma,
 			POS:              string(res.POS),
-			PromptForm:       res.PromptForm,
 			CEFRLevel:        res.CEFRLevel,
 			GlobalZipfFreq:   res.GlobalZipfFreq,
 			FullDefinition:   res.FullDefinition,

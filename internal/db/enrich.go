@@ -21,7 +21,7 @@ func (s *Store) ListEnrichCandidates(filter EnrichFilter) ([]LexemeEntry, error)
 	var b strings.Builder
 	args := []any{}
 	b.WriteString(`
-		SELECT l.id, l.lemma, l.pos, l.prompt_form, COALESCE(l.cefr_level, ''),
+		SELECT l.id, l.lemma, l.pos, COALESCE(l.cefr_level, ''),
 			l.full_definition, l.short_definitions_json, l.translations_lt_json,
 			l.mastery_level, l.known
 		FROM lexemes l
@@ -60,7 +60,7 @@ func (s *Store) ListEnrichCandidates(filter EnrichFilter) ([]LexemeEntry, error)
 	for rows.Next() {
 		var e LexemeEntry
 		var shortJSON, ltJSON string
-		if err := rows.Scan(&e.ID, &e.Lemma, &e.POS, &e.PromptForm, &e.CEFRLevel,
+		if err := rows.Scan(&e.ID, &e.Lemma, &e.POS, &e.CEFRLevel,
 			&e.FullDefinition, &shortJSON, &ltJSON, &e.MasteryLevel, &e.Known); err != nil {
 			return nil, err
 		}

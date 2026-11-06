@@ -124,7 +124,6 @@ func TestDynamicObscurityScoreAndVocabularyFiltering(t *testing.T) {
 		{
 			Lemma:            "ataraxia",
 			POS:              "noun",
-			PromptForm:       "an ataraxia",
 			CEFRLevel:        "",
 			GlobalZipfFreq:   3.0,
 			FullDefinition:   "1. Calmness untroubled by mental or emotional disquiet",
@@ -135,7 +134,6 @@ func TestDynamicObscurityScoreAndVocabularyFiltering(t *testing.T) {
 		{
 			Lemma:            "zeitgeist",
 			POS:              "noun",
-			PromptForm:       "a zeitgeist",
 			CEFRLevel:        "",
 			GlobalZipfFreq:   3.0,
 			FullDefinition:   "1. The spirit of the time",
@@ -146,7 +144,6 @@ func TestDynamicObscurityScoreAndVocabularyFiltering(t *testing.T) {
 		{
 			Lemma:            "laconic",
 			POS:              "adjective",
-			PromptForm:       "laconic (adj.)",
 			CEFRLevel:        "c1",
 			GlobalZipfFreq:   2.0,
 			FullDefinition:   "1. Brief and to the point",
@@ -175,7 +172,6 @@ func TestDynamicObscurityScoreAndVocabularyFiltering(t *testing.T) {
 		{
 			Lemma:            "zeitgeist",
 			POS:              "noun",
-			PromptForm:       "a zeitgeist",
 			CEFRLevel:        "",
 			GlobalZipfFreq:   3.0,
 			FullDefinition:   "1. The spirit of the time",
@@ -293,7 +289,6 @@ func TestLexemeSourcesResolutionAndPreservation(t *testing.T) {
 		{
 			Lemma:            "laconic",
 			POS:              "adjective",
-			PromptForm:       "laconic (adj.)",
 			CEFRLevel:        "c1",
 			GlobalZipfFreq:   2.1,
 			FullDefinition:   "1. Brief and to the point",

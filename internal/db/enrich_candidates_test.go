@@ -61,10 +61,10 @@ func equalStrings(a, b []string) bool {
 func TestListEnrichCandidatesSkipsLexemesWithAnyResolvedTranslations(t *testing.T) {
 	store := openEnrichStore(t)
 	createEnrichBook(t, store, "book1", []db.LexemeInput{
-		{Lemma: "laconic", POS: "adjective", PromptForm: "laconic (adj.)", FullDefinition: "using few words"},
-		{Lemma: "obdurate", POS: "adjective", PromptForm: "obdurate (adj.)", TranslationsLT: []string{"užsispyręs"}},
-		{Lemma: "quixotic", POS: "adjective", PromptForm: "quixotic (adj.)"},
-		{Lemma: "perfidy", POS: "noun", PromptForm: "a perfidy"},
+		{Lemma: "laconic", POS: "adjective", FullDefinition: "using few words"},
+		{Lemma: "obdurate", POS: "adjective", TranslationsLT: []string{"užsispyręs"}},
+		{Lemma: "quixotic", POS: "adjective"},
+		{Lemma: "perfidy", POS: "noun"},
 	})
 
 	if err := store.UpsertLexemeSource(lexemeIDByLemma(t, store, "quixotic"), db.SourceOnline, db.SourceContent{TranslationsLT: []string{"donkichotiškas"}}); err != nil {
@@ -81,7 +81,7 @@ func TestListEnrichCandidatesSkipsLexemesWithAnyResolvedTranslations(t *testing.
 	if want := []string{"laconic"}; !equalStrings(candidateLemmas(got), want) {
 		t.Fatalf("candidates = %v, want %v", candidateLemmas(got), want)
 	}
-	if got[0].FullDefinition != "using few words" || got[0].PromptForm != "laconic (adj.)" {
+	if got[0].FullDefinition != "using few words" {
 		t.Errorf("expected resolved lexeme details, got %+v", got[0])
 	}
 }
@@ -89,11 +89,11 @@ func TestListEnrichCandidatesSkipsLexemesWithAnyResolvedTranslations(t *testing.
 func TestListEnrichCandidatesFiltersByBookAndLimit(t *testing.T) {
 	store := openEnrichStore(t)
 	book1 := createEnrichBook(t, store, "book1", []db.LexemeInput{
-		{Lemma: "laconic", POS: "adjective", PromptForm: "laconic (adj.)"},
-		{Lemma: "obdurate", POS: "adjective", PromptForm: "obdurate (adj.)"},
+		{Lemma: "laconic", POS: "adjective"},
+		{Lemma: "obdurate", POS: "adjective"},
 	})
 	book2 := createEnrichBook(t, store, "book2", []db.LexemeInput{
-		{Lemma: "perfidy", POS: "noun", PromptForm: "a perfidy"},
+		{Lemma: "perfidy", POS: "noun"},
 	})
 
 	got, err := store.ListEnrichCandidates(db.EnrichFilter{BookID: book2})

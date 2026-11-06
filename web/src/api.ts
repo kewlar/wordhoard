@@ -25,7 +25,6 @@ export interface LexemeEntry {
   id: number;
   lemma: string;
   pos: string;
-  prompt_form: string;
   cefr_level: string;
   obscurity_score: number;
   global_rarity: number;
