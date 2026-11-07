@@ -9,6 +9,7 @@ import {
   type VocabularyPage,
   type VocabularyQuery,
 } from './api';
+import { lookupLinks } from './lookupLinks';
 import {
   advance,
   applyEdit,
@@ -246,6 +247,22 @@ interface BookVocabularyViewProps {
   apiClient: ApiClient;
   bookId: number;
   onNavigate: (path: string) => void;
+}
+
+function LookupLinks({ lemma, marginBottom }: { lemma: string; marginBottom: string }) {
+  return (
+    <div style={{ fontSize: '0.85rem', color: '#444', marginBottom }}>
+      Look up:{' '}
+      {lookupLinks(lemma).map((link, i) => (
+        <span key={link.label}>
+          {i > 0 && ' · '}
+          <a href={link.href} target="_blank" rel="noopener noreferrer">
+            {link.label}
+          </a>
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function renderHighlightedExcerpt(ex: Excerpt) {
@@ -854,6 +871,8 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
                 {item.full_definition}
               </div>
 
+              <LookupLinks lemma={item.lemma} marginBottom="0.6rem" />
+
               <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
                 <button
                   type="button"
@@ -1359,6 +1378,8 @@ function BookQuizView({
                 >
                   {currentItem.full_definition}
                 </div>
+
+                <LookupLinks lemma={currentItem.lemma} marginBottom="0.75rem" />
 
                 {currentItem.excerpts && currentItem.excerpts.length > 0 && (
                   <div style={{ marginBottom: '1rem' }}>

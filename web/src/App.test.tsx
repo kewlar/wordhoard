@@ -173,6 +173,21 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(screen.getByText(/concise, terse/i)).toBeInTheDocument();
     expect(screen.getByText(/1\. Using very few words/)).toBeInTheDocument();
     expect(screen.getByText(/2\. Concise to the point of seeming rude/)).toBeInTheDocument();
+
+    // External look-up links per lexeme, opening in a new tab
+    const mwLinks = screen.getAllByRole('link', { name: 'Merriam-Webster' });
+    expect(mwLinks).toHaveLength(2);
+    expect(mwLinks[0]).toHaveAttribute('href', 'https://www.merriam-webster.com/dictionary/laconic');
+    expect(mwLinks[0]).toHaveAttribute('target', '_blank');
+    expect(mwLinks[0]).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(screen.getAllByRole('link', { name: 'Collins' })[1]).toHaveAttribute(
+      'href',
+      'https://www.collinsdictionary.com/dictionary/english/obfuscate'
+    );
+    expect(screen.getAllByRole('link', { name: 'Google Translate (EN→LT)' })[0]).toHaveAttribute(
+      'href',
+      'https://translate.google.com/?sl=en&tl=lt&text=laconic&op=translate'
+    );
   });
 
   it('supports filtering by POS, searching by lemma, and pagination in Book Vocabulary Browser', async () => {
@@ -446,6 +461,9 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     const answerInput1 = screen.getByRole('textbox', { name: /your answer/i });
     expect(answerInput1).toHaveFocus();
 
+    // Look-up links must not leak the answer during the prompt phase
+    expect(screen.queryByRole('link', { name: 'Google Translate (EN→LT)' })).not.toBeInTheDocument();
+
     // Press Enter on empty input -> skipped / graded as Incorrect
     await user.keyboard('{Enter}');
 
@@ -460,6 +478,19 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(screen.getByText('0 / 2')).toBeInTheDocument();
     expect(screen.getByText(/lakoniškas, glaustas/i)).toBeInTheDocument();
     expect(screen.getByText(/concise, terse/i)).toBeInTheDocument();
+
+    // Reveal card offers external look-up links for the lemma
+    const revealMw = screen.getByRole('link', { name: 'Merriam-Webster' });
+    expect(revealMw).toHaveAttribute('href', 'https://www.merriam-webster.com/dictionary/laconic');
+    expect(revealMw).toHaveAttribute('target', '_blank');
+    expect(screen.getByRole('link', { name: 'Collins' })).toHaveAttribute(
+      'href',
+      'https://www.collinsdictionary.com/dictionary/english/laconic'
+    );
+    expect(screen.getByRole('link', { name: 'Google Translate (EN→LT)' })).toHaveAttribute(
+      'href',
+      'https://translate.google.com/?sl=en&tl=lt&text=laconic&op=translate'
+    );
 
     // "Next" button must be automatically focused on reveal screen
     const nextBtn1 = screen.getByRole('button', { name: /^next$/i });
