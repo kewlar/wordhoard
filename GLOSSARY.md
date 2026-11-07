@@ -48,7 +48,11 @@ The origin tier (`offline`, `online`, or `user`) of a **Lexeme**'s definitions a
 A compound metric assigned to each **Lexeme** within a **Book**, combining its global rarity in English with its library-wide inverse document frequency and its occurrence count in the book. Used to order a book's vocabulary list from most obscure to most common.
 
 **Mastery Level**:
-A global, per-**Lexeme** integer level (`0..5`) tracking how well the user knows that **Lexeme** across all books. Committed immediately to the backend on the user's **first attempt** at a lexeme in a **Quiz**: incremented by `1` on a correct first attempt, and reset to `0` on an incorrect or skipped first attempt.
+A global, per-**Lexeme** integer level (`0..5`) tracking how well the user knows that **Lexeme** across all books. Committed immediately to the backend on the user's **first attempt** at a lexeme in a **Quiz**: incremented by `1` on a correct first attempt, and reset to `0` on an incorrect or skipped first attempt, unless later replaced by an **Attempt Correction**.
+
+**Attempt Correction**:
+The re-scoring of an incorrect first attempt in a **Quiz** as correct, after the user edits the **Lexeme** on the reveal card so that their submitted answer now matches; the **Mastery Level** is recomputed from its value before that attempt.
+_Avoid_: Override, fix-up
 
 **Known Status**:
 A manual override on a **Lexeme** indicating the user already knows (or wants to ignore) it, excluding it from future quizzes across all books.
