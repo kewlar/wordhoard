@@ -184,7 +184,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
       'href',
       'https://www.collinsdictionary.com/dictionary/english/obfuscate'
     );
-    expect(screen.getAllByRole('link', { name: 'Google Translate (EN→LT)' })[0]).toHaveAttribute(
+    expect(screen.getAllByRole('link', { name: 'Google Translate' })[0]).toHaveAttribute(
       'href',
       'https://translate.google.com/?sl=en&tl=lt&text=laconic&op=translate'
     );
@@ -281,7 +281,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(await screen.findByText('laconic')).toBeInTheDocument();
   });
 
-  it('toggles "View in context" to expand and collapse book excerpts with highlighted surface words and chapter references', async () => {
+  it('toggles "Book excerpt" to expand and collapse book excerpts with highlighted surface words and chapter references', async () => {
     const user = userEvent.setup();
     window.history.pushState({}, '', '/books/1/vocabulary');
 
@@ -298,7 +298,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(screen.queryByText('Chapter 3')).not.toBeInTheDocument();
     expect(screen.queryByText(/Magnus gave a/)).not.toBeInTheDocument();
 
-    const toggleButtons = screen.getAllByRole('button', { name: /view in context/i });
+    const toggleButtons = screen.getAllByRole('button', { name: /^book excerpt$/i });
     expect(toggleButtons.length).toBeGreaterThanOrEqual(1);
 
     // Click to expand excerpts for the first entry ("laconic")
@@ -462,7 +462,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(answerInput1).toHaveFocus();
 
     // Look-up links must not leak the answer during the prompt phase
-    expect(screen.queryByRole('link', { name: 'Google Translate (EN→LT)' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Google Translate' })).not.toBeInTheDocument();
 
     // Press Enter on empty input -> skipped / graded as Incorrect
     await user.keyboard('{Enter}');
@@ -487,7 +487,7 @@ describe('Books List & Book Vocabulary Browser UI', () => {
       'href',
       'https://www.collinsdictionary.com/dictionary/english/laconic'
     );
-    expect(screen.getByRole('link', { name: 'Google Translate (EN→LT)' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Google Translate' })).toHaveAttribute(
       'href',
       'https://translate.google.com/?sl=en&tl=lt&text=laconic&op=translate'
     );
@@ -604,6 +604,43 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(screen.getByText('trumpas, lakoniškas')).toBeInTheDocument();
     expect(screen.getByText('brief, succinct')).toBeInTheDocument();
     expect(screen.getByText('1. Custom edited definition')).toBeInTheDocument();
+  });
+
+  it('shows all book excerpts on the quiz reveal card via the "Book excerpt" toggle', async () => {
+    const user = userEvent.setup();
+    window.history.pushState({}, '', '/books/1/quiz');
+
+    const client: ApiClient = {
+      listBooks: async () => [sampleBook],
+      getBookVocabulary: async () => sampleVocabularyPage,
+      startBookQuiz: async () => ({ book: sampleBook, items: sampleVocabularyPage.items }),
+      recordLexemeAttempt: async (id: number) => ({
+        id,
+        lemma: 'laconic',
+        pos: 'adjective',
+        mastery_level: 0,
+        known: false,
+      }),
+    };
+
+    render(<App apiClient={client} shuffleQuizItems={(items) => [...items]} />);
+
+    expect(await screen.findByText('laconic')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^book excerpt$/i })).not.toBeInTheDocument();
+    await user.keyboard('{Enter}');
+
+    const toggle = await screen.findByRole('button', { name: /^book excerpt$/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Chapter 3')).not.toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Chapter 3')).toBeInTheDocument();
+    expect(screen.getByText('Chapter 7')).toBeInTheDocument();
+    expect(document.querySelectorAll('mark')).toHaveLength(2);
+
+    await user.click(toggle);
+    expect(screen.queryByText('Chapter 3')).not.toBeInTheDocument();
   });
 
   it('re-evaluates an initially incorrect quiz answer on the reveal card after editing the lexeme, flipping to Correct, updating first-attempt mastery, removing from repeat queue, and focusing Next/Finish', async () => {
