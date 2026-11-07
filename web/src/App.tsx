@@ -249,18 +249,94 @@ interface BookVocabularyViewProps {
   onNavigate: (path: string) => void;
 }
 
-function LookupLinks({ lemma, marginBottom }: { lemma: string; marginBottom: string }) {
+const helperButtonStyle = {
+  background: 'none',
+  border: '1px solid #ccd4e0',
+  borderRadius: '4px',
+  padding: '0.25rem 0.6rem',
+  fontSize: '0.85rem',
+  color: '#0b57d0',
+  cursor: 'pointer',
+} as const;
+
+function ExcerptList({ excerpts }: { excerpts: Excerpt[] }) {
+  if (excerpts.length === 0) {
+    return (
+      <p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>
+        No excerpts stored for this lexeme.
+      </p>
+    );
+  }
   return (
-    <div style={{ fontSize: '0.85rem', color: '#444', marginBottom }}>
-      Look up:{' '}
-      {lookupLinks(lemma).map((link, i) => (
-        <span key={link.label}>
-          {i > 0 && ' · '}
-          <a href={link.href} target="_blank" rel="noopener noreferrer">
-            {link.label}
-          </a>
-        </span>
+    <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.5rem' }}>
+      {excerpts.map((ex, idx) => (
+        <li
+          key={ex.id || idx}
+          style={{
+            borderLeft: '3px solid #0b57d0',
+            backgroundColor: '#f8fafd',
+            padding: '0.5rem 0.75rem',
+            fontSize: '0.9rem',
+            borderRadius: '0 4px 4px 0',
+          }}
+        >
+          <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#555', marginBottom: '0.25rem' }}>
+            {ex.chapter}
+          </div>
+          <div style={{ color: '#222', lineHeight: 1.45 }}>{renderHighlightedExcerpt(ex)}</div>
+        </li>
       ))}
+    </ul>
+  );
+}
+
+interface UnderstandingHelpersProps {
+  lemma: string;
+  excerpts: Excerpt[];
+  /** When false, the "Book excerpt" toggle is omitted for lexemes without excerpts. */
+  showEmptyExcerptToggle: boolean;
+  excerptOpen: boolean;
+  onToggleExcerpt: () => void;
+}
+
+/** Book excerpt toggle + external look-up links, with the excerpt panel opening beneath. */
+function UnderstandingHelpers({
+  lemma,
+  excerpts,
+  showEmptyExcerptToggle,
+  excerptOpen,
+  onToggleExcerpt,
+}: UnderstandingHelpersProps) {
+  const showToggle = showEmptyExcerptToggle || excerpts.length > 0;
+  return (
+    <div style={{ marginBottom: '0.75rem' }}>
+      <div style={{ display: 'flex', gap: '0.85rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        {showToggle && (
+          <button
+            type="button"
+            aria-expanded={excerptOpen}
+            onClick={onToggleExcerpt}
+            style={helperButtonStyle}
+          >
+            Book excerpt
+          </button>
+        )}
+        <span style={{ fontSize: '0.85rem' }}>
+          {lookupLinks(lemma).map((link, i) => (
+            <span key={link.label}>
+              {i > 0 && ' · '}
+              <a href={link.href} target="_blank" rel="noopener noreferrer">
+                {link.label}
+              </a>
+            </span>
+          ))}
+        </span>
+      </div>
+      {showToggle && excerptOpen && (
+        <div style={{ marginTop: '0.5rem' }}>
+          <ExcerptList excerpts={excerpts} />
+        </div>
+      )}
     </div>
   );
 }
@@ -871,26 +947,23 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
                 {item.full_definition}
               </div>
 
-              <LookupLinks lemma={item.lemma} marginBottom="0.6rem" />
+              <UnderstandingHelpers
+                lemma={item.lemma}
+                excerpts={item.excerpts ?? []}
+                showEmptyExcerptToggle
+                excerptOpen={Boolean(expandedContextIds[item.id])}
+                onToggleExcerpt={() => toggleContext(item.id)}
+              />
 
-              <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
-                <button
-                  type="button"
-                  aria-expanded={Boolean(expandedContextIds[item.id])}
-                  onClick={() => toggleContext(item.id)}
-                  style={{
-                    background: 'none',
-                    border: '1px solid #ccd4e0',
-                    borderRadius: '4px',
-                    padding: '0.25rem 0.6rem',
-                    fontSize: '0.85rem',
-                    color: '#0b57d0',
-                    cursor: 'pointer',
-                  }}
-                >
-                  View in context ({item.excerpts?.length ?? 0})
-                </button>
-
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '0.6rem',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                }}
+              >
                 <button
                   type="button"
                   onClick={() => void handleToggleKnown(item)}
@@ -933,53 +1006,6 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
                   onSave={(fields) => handleSaveEdit(item, fields)}
                   onCancel={() => setEditingLexemeId(null)}
                 />
-              )}
-
-              {expandedContextIds[item.id] && (
-                <div style={{ marginTop: '0.75rem' }}>
-                  {item.excerpts && item.excerpts.length > 0 ? (
-                    <ul
-                      style={{
-                        listStyle: 'none',
-                        padding: 0,
-                        margin: 0,
-                        display: 'grid',
-                        gap: '0.5rem',
-                      }}
-                    >
-                      {item.excerpts.map((ex, idx) => (
-                        <li
-                          key={ex.id || idx}
-                          style={{
-                            borderLeft: '3px solid #0b57d0',
-                            backgroundColor: '#f8fafd',
-                            padding: '0.5rem 0.75rem',
-                            fontSize: '0.9rem',
-                            borderRadius: '0 4px 4px 0',
-                          }}
-                        >
-                          <div
-                            style={{
-                              fontSize: '0.78rem',
-                              fontWeight: 600,
-                              color: '#555',
-                              marginBottom: '0.25rem',
-                            }}
-                          >
-                            {ex.chapter}
-                          </div>
-                          <div style={{ color: '#222', lineHeight: 1.45 }}>
-                            {renderHighlightedExcerpt(ex)}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>
-                      No excerpts stored for this lexeme.
-                    </p>
-                  )}
-                </div>
               )}
             </li>
           ))}
@@ -1379,54 +1405,13 @@ function BookQuizView({
                   {currentItem.full_definition}
                 </div>
 
-                <LookupLinks lemma={currentItem.lemma} marginBottom="0.75rem" />
-
-                {currentItem.excerpts && currentItem.excerpts.length > 0 && (
-                  <div style={{ marginBottom: '1rem' }}>
-                    <button
-                      type="button"
-                      aria-expanded={excerptOpen}
-                      onClick={() => setExcerptOpen((o) => !o)}
-                      style={{
-                        background: 'none',
-                        border: '1px solid #ccd4e0',
-                        borderRadius: '4px',
-                        padding: '0.25rem 0.6rem',
-                        fontSize: '0.85rem',
-                        color: '#0b57d0',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {excerptOpen ? 'Hide book excerpt' : 'Show book excerpt'}
-                    </button>
-                    {excerptOpen && (
-                      <div
-                        style={{
-                          marginTop: '0.5rem',
-                          borderLeft: '3px solid #0b57d0',
-                          backgroundColor: '#f8fafd',
-                          padding: '0.5rem 0.75rem',
-                          fontSize: '0.9rem',
-                          borderRadius: '0 4px 4px 0',
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: '0.78rem',
-                            fontWeight: 600,
-                            color: '#555',
-                            marginBottom: '0.25rem',
-                          }}
-                        >
-                          {currentItem.excerpts[0]!.chapter}
-                        </div>
-                        <div style={{ color: '#222', lineHeight: 1.45 }}>
-                          {renderHighlightedExcerpt(currentItem.excerpts[0]!)}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
+                <UnderstandingHelpers
+                  lemma={currentItem.lemma}
+                  excerpts={currentItem.excerpts ?? []}
+                  showEmptyExcerptToggle={false}
+                  excerptOpen={excerptOpen}
+                  onToggleExcerpt={() => setExcerptOpen((o) => !o)}
+                />
 
                 <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
                   <button
@@ -1451,6 +1436,7 @@ function BookQuizView({
                     type="button"
                     onClick={() => void handleToggleQuizKnown()}
                     style={{
+                      marginLeft: 'auto',
                       background: currentItem.known ? '#eee' : 'none',
                       border: '1px solid #ccd4e0',
                       borderRadius: '6px',

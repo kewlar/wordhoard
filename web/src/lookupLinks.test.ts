@@ -7,7 +7,7 @@ describe('lookupLinks', () => {
       { label: 'Merriam-Webster', href: 'https://www.merriam-webster.com/dictionary/laconic' },
       { label: 'Collins', href: 'https://www.collinsdictionary.com/dictionary/english/laconic' },
       {
-        label: 'Google Translate (EN→LT)',
+        label: 'Google Translate',
         href: 'https://translate.google.com/?sl=en&tl=lt&text=laconic&op=translate',
       },
     ]);

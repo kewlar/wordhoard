@@ -10,7 +10,7 @@ export function lookupLinks(lemma: string): LookupLink[] {
     { label: 'Merriam-Webster', href: `https://www.merriam-webster.com/dictionary/${q}` },
     { label: 'Collins', href: `https://www.collinsdictionary.com/dictionary/english/${q}` },
     {
-      label: 'Google Translate (EN→LT)',
+      label: 'Google Translate',
       href: `https://translate.google.com/?sl=en&tl=lt&text=${q}&op=translate`,
     },
   ];
