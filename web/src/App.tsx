@@ -1234,7 +1234,7 @@ function BookQuizView({
 
       {!loading && !error && quizSize === 0 && (
         <div>
-          <p>All lexemes in this book are already mastered or marked as known!</p>
+          <p>All lexemes in this book are marked as known!</p>
           <button
             type="button"
             onClick={() => onNavigate(`/books/${bookId}/vocabulary`)}
