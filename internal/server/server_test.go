@@ -703,7 +703,8 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 	assertVocabLemmas("statuses=learning,known", []string{"conundrum", "ephemeral"})
 	assertVocabLemmas("statuses=unseen,learning,mastered,known", []string{"laconic", "conundrum", "ephemeral"})
 
-	// Reset conundrum back to unseen (mastery_level = 0) and verify statuses=unseen returns conundrum
+	// Failing conundrum resets it to mastery_level = 0, but it has been quizzed,
+	// so it stays Learning rather than returning to Unseen.
 	resetConundrumResp, err := http.Post(
 		fmt.Sprintf("%s/api/lexemes/%d/attempt", ts.URL, conundrumID),
 		"application/json",
@@ -713,8 +714,8 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		t.Fatalf("POST reset conundrum: %v", err)
 	}
 	resetConundrumResp.Body.Close()
-	assertVocabLemmas("statuses=unseen", []string{"conundrum"})
-	assertVocabLemmas("statuses=unseen,mastered", []string{"laconic", "conundrum"})
+	assertVocabLemmas("statuses=unseen", []string{})
+	assertVocabLemmas("statuses=learning,mastered", []string{"laconic", "conundrum"})
 
 	// Now laconic is mastered (6) globally: Book 2 has only 'laconic' (mastered) and 'ephemeral' (known=true).
 	// Mastered lexemes stay quizzable (only Known ones are excluded), so Book 2's quiz returns just laconic,

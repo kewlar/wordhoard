@@ -15,7 +15,9 @@ const sampleBook: BookSummary = {
   total_lexemes: 42,
   known_count: 3,
   mastered_count: 5,
-  mastery_distribution: { '0': 30, '1': 2, '2': 2, '3': 0, '4': 0, '5': 5 },
+  learning_count: 4,
+  due_count: 2,
+  unseen_count: 30,
 };
 
 const sampleVocabularyPage: VocabularyPage = {
@@ -104,7 +106,9 @@ describe('Books List & Book Vocabulary Browser UI', () => {
           total_lexemes: 18,
           known_count: 0,
           mastered_count: 0,
-          mastery_distribution: { '0': 18, '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 },
+          learning_count: 0,
+          due_count: 0,
+          unseen_count: 18,
         },
       ],
       getBookVocabulary: async () => sampleVocabularyPage,
@@ -117,7 +121,8 @@ describe('Books List & Book Vocabulary Browser UI', () => {
     expect(screen.getAllByText('John le Carré')).toHaveLength(2);
     expect(screen.getByText(/42 lexemes/i)).toBeInTheDocument();
     expect(screen.getByText(/18 lexemes/i)).toBeInTheDocument();
-    expect(screen.getByText(/30 unseen · 4 learning · 5 mastered · 3 known/i)).toBeInTheDocument();
+    expect(screen.getByText('3 known · 5 mastered · 4 learning (2 due review) · 30 unseen')).toBeInTheDocument();
+    expect(screen.getByText('0 known · 0 mastered · 0 learning (0 due review) · 18 unseen')).toBeInTheDocument();
   });
 
   it('renders an empty-state message when no books have been imported', async () => {
@@ -157,6 +162,11 @@ describe('Books List & Book Vocabulary Browser UI', () => {
 
     // Prompt forms & POS
     expect(await screen.findByText('laconic')).toBeInTheDocument();
+
+    // Book header: author and lexeme counts in the same form as the Books List
+    expect(
+      screen.getByText('John le Carré · 42 lexemes: 3 known · 5 mastered · 4 learning (2 due review) · 30 unseen'),
+    ).toBeInTheDocument();
     expect(screen.getByText('obfuscate')).toBeInTheDocument();
 
     // Score & breakdown: obscurity score, global rarity, book occurrences, library book count

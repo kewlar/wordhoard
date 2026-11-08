@@ -122,6 +122,14 @@ export function App({
   );
 }
 
+/** A book's lexeme counts by Lexeme Status, shared by the Books List and the vocabulary header. */
+function formatLexemeStatusCounts(book: BookSummary): string {
+  return (
+    `${book.known_count} known · ${book.mastered_count} mastered · ` +
+    `${book.learning_count} learning (${book.due_count} due review) · ${book.unseen_count} unseen`
+  );
+}
+
 interface BooksListViewProps {
   apiClient: ApiClient;
   onNavigate: (path: string) => void;
@@ -174,10 +182,6 @@ function BooksListView({ apiClient, onNavigate }: BooksListViewProps) {
           {books.map((book) => {
             const vocabHref = `/books/${book.id}/vocabulary`;
             const quizHref = `/books/${book.id}/quiz`;
-            const dist = book.mastery_distribution ?? {};
-            const unseenCount = dist['0'] ?? 0;
-            const learningCount =
-              (dist['1'] ?? 0) + (dist['2'] ?? 0) + (dist['3'] ?? 0) + (dist['4'] ?? 0);
             return (
               <li
                 key={book.id}
@@ -211,8 +215,7 @@ function BooksListView({ apiClient, onNavigate }: BooksListViewProps) {
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontWeight: 600 }}>{book.total_lexemes} lexemes</div>
                     <div style={{ fontSize: '0.85rem', color: '#666' }}>
-                      {unseenCount} unseen · {learningCount} learning · {book.mastered_count} mastered ·{' '}
-                      {book.known_count} known
+                      {formatLexemeStatusCounts(book)}
                     </div>
                   </div>
                   <a
@@ -777,8 +780,8 @@ function BookVocabularyView({ apiClient, bookId, onNavigate }: BookVocabularyVie
         <div style={{ marginBottom: '1.25rem' }}>
           <h2 style={{ margin: 0, fontSize: '1.4rem' }}>{pageData.book.title}</h2>
           <p style={{ margin: '0.25rem 0 0', color: '#555' }}>
-            {pageData.book.author} · {pageData.book.total_lexemes} learnable lexemes ·{' '}
-            {pageData.book.mastered_count} mastered · {pageData.book.known_count} known
+            {pageData.book.author} · {pageData.book.total_lexemes} lexemes:{' '}
+            {formatLexemeStatusCounts(pageData.book)}
           </p>
         </div>
       )}
