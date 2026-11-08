@@ -19,17 +19,21 @@ var (
 
 
 type Book struct {
-	ID            int64          `json:"id"`
-	Title         string         `json:"title"`
-	Author        string         `json:"author"`
-	Filename      string         `json:"filename"`
-	FileSize      int64          `json:"file_size"`
-	SHA256        string         `json:"sha256"`
-	ImportedAt    string         `json:"imported_at"`
-	TotalLexemes  int            `json:"total_lexemes"`
-	KnownCount    int            `json:"known_count"`
-	MasteredCount int            `json:"mastered_count"`
-	MasteryCounts map[string]int `json:"mastery_distribution"`
+	ID         int64  `json:"id"`
+	Title      string `json:"title"`
+	Author     string `json:"author"`
+	Filename   string `json:"filename"`
+	FileSize   int64  `json:"file_size"`
+	SHA256     string `json:"sha256"`
+	ImportedAt string `json:"imported_at"`
+	// Lexeme counts by Lexeme Status; DueCount is the subset of
+	// LearningCount whose Due Date is today or earlier.
+	TotalLexemes  int `json:"total_lexemes"`
+	KnownCount    int `json:"known_count"`
+	MasteredCount int `json:"mastered_count"`
+	LearningCount int `json:"learning_count"`
+	DueCount      int `json:"due_count"`
+	UnseenCount   int `json:"unseen_count"`
 }
 
 type BookInput struct {
@@ -102,13 +106,36 @@ type VocabularyFilter struct {
 	Statuses []string
 }
 
-// lexemeStatusSQL defines each Lexeme Status (GLOSSARY) as a SQL predicate
-// over lexemes aliased as l.
+// dueDateSQL is a lexeme's Due Date (GLOSSARY) as a local calendar day, over
+// lexemes aliased as l: last quiz day + an interval of 0 days at Mastery
+// Level 0 and 2^(level-1) days above it. NULL means New (never quizzed). A
+// level > 0 with no quiz timestamp (legacy data) is Due today. The exponent is
+// clamped only to keep the date within SQLite's range; real levels never get
+// near it.
+const dueDateSQL = `(CASE
+	WHEN l.last_quizzed_at IS NULL AND l.mastery_level = 0 THEN NULL
+	WHEN l.last_quizzed_at IS NULL THEN date('now', 'localtime')
+	ELSE date(
+		l.last_quizzed_at, 'localtime',
+		'+' || (CASE WHEN l.mastery_level = 0 THEN 0
+			ELSE (1 << min(l.mastery_level - 1, 20)) END) || ' days'
+	)
+END)`
+
+// Lexeme Status (GLOSSARY) predicates over lexemes aliased as l. "Never
+// quizzed" matches the New Review State: no quiz timestamp and Mastery Level 0.
+const (
+	unseenSQL   = "(l.known = 0 AND l.last_quizzed_at IS NULL AND l.mastery_level = 0)"
+	learningSQL = "(l.known = 0 AND (l.last_quizzed_at IS NOT NULL OR l.mastery_level > 0) AND l.mastery_level < 5)"
+	masteredSQL = "(l.known = 0 AND l.mastery_level >= 5)"
+	knownSQL    = "(l.known = 1)"
+)
+
 var lexemeStatusSQL = map[string]string{
-	"unseen":   "(l.known = 0 AND l.mastery_level = 0)",
-	"learning": "(l.known = 0 AND l.mastery_level BETWEEN 1 AND 4)",
-	"mastered": "(l.known = 0 AND l.mastery_level >= 5)",
-	"known":    "(l.known = 1)",
+	"unseen":   unseenSQL,
+	"learning": learningSQL,
+	"mastered": masteredSQL,
+	"known":    knownSQL,
 }
 
 type LexemeProgress struct {
@@ -379,28 +406,39 @@ func (s *Store) CreateBook(in BookInput) (*Book, bool, error) {
 	return book, true, nil
 }
 
+// bookSelectSQL selects books with their lexeme counts by Lexeme Status, in
+// scanBook's column order. Callers append WHERE, GROUP BY b.id and ORDER BY.
+const bookSelectSQL = `
+	SELECT
+		b.id,
+		b.title,
+		b.author,
+		b.filename,
+		b.file_size,
+		b.sha256,
+		b.imported_at,
+		COUNT(bl.lexeme_id),
+		COALESCE(SUM(CASE WHEN ` + knownSQL + ` THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN ` + masteredSQL + ` THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN ` + learningSQL + ` THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN ` + learningSQL + ` AND ` + dueDateSQL + ` <= date('now', 'localtime') THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN ` + unseenSQL + ` THEN 1 ELSE 0 END), 0)
+	FROM books b
+	LEFT JOIN book_lexemes bl ON bl.book_id = b.id
+	LEFT JOIN lexemes l ON l.id = bl.lexeme_id
+`
+
+func scanBook(row interface{ Scan(...any) error }) (Book, error) {
+	var b Book
+	err := row.Scan(
+		&b.ID, &b.Title, &b.Author, &b.Filename, &b.FileSize, &b.SHA256, &b.ImportedAt,
+		&b.TotalLexemes, &b.KnownCount, &b.MasteredCount, &b.LearningCount, &b.DueCount, &b.UnseenCount,
+	)
+	return b, err
+}
+
 func (s *Store) ListBooks() ([]Book, error) {
-	rows, err := s.db.Query(`
-		SELECT
-			b.id,
-			b.title,
-			b.author,
-			b.filename,
-			b.file_size,
-			b.sha256,
-			b.imported_at,
-			COUNT(bl.lexeme_id) AS total_lexemes,
-			COALESCE(SUM(CASE WHEN l.known = 1 THEN 1 ELSE 0 END), 0) AS known_count,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level >= 5 THEN 1 ELSE 0 END), 0) AS mastered_count,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 0 THEN 1 ELSE 0 END), 0) AS m0,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 1 THEN 1 ELSE 0 END), 0) AS m1,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 2 THEN 1 ELSE 0 END), 0) AS m2,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 3 THEN 1 ELSE 0 END), 0) AS m3,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 4 THEN 1 ELSE 0 END), 0) AS m4,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level >= 5 THEN 1 ELSE 0 END), 0) AS m5
-		FROM books b
-		LEFT JOIN book_lexemes bl ON bl.book_id = b.id
-		LEFT JOIN lexemes l ON l.id = bl.lexeme_id
+	rows, err := s.db.Query(bookSelectSQL + `
 		GROUP BY b.id
 		ORDER BY b.imported_at DESC, b.id DESC
 	`)
@@ -411,22 +449,9 @@ func (s *Store) ListBooks() ([]Book, error) {
 
 	books := make([]Book, 0)
 	for rows.Next() {
-		var b Book
-		var m0, m1, m2, m3, m4, m5 int
-		if err := rows.Scan(
-			&b.ID, &b.Title, &b.Author, &b.Filename, &b.FileSize, &b.SHA256, &b.ImportedAt,
-			&b.TotalLexemes, &b.KnownCount, &b.MasteredCount,
-			&m0, &m1, &m2, &m3, &m4, &m5,
-		); err != nil {
+		b, err := scanBook(rows)
+		if err != nil {
 			return nil, err
-		}
-		b.MasteryCounts = map[string]int{
-			"0": m0,
-			"1": m1,
-			"2": m2,
-			"3": m3,
-			"4": m4,
-			"5": m5,
 		}
 		books = append(books, b)
 	}
@@ -437,49 +462,15 @@ func (s *Store) ListBooks() ([]Book, error) {
 }
 
 func (s *Store) GetBook(bookID int64) (*Book, error) {
-	var b Book
-	var m0, m1, m2, m3, m4, m5 int
-	err := s.db.QueryRow(`
-		SELECT
-			b.id,
-			b.title,
-			b.author,
-			b.filename,
-			b.file_size,
-			b.sha256,
-			b.imported_at,
-			COUNT(bl.lexeme_id) AS total_lexemes,
-			COALESCE(SUM(CASE WHEN l.known = 1 THEN 1 ELSE 0 END), 0) AS known_count,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level >= 5 THEN 1 ELSE 0 END), 0) AS mastered_count,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 0 THEN 1 ELSE 0 END), 0) AS m0,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 1 THEN 1 ELSE 0 END), 0) AS m1,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 2 THEN 1 ELSE 0 END), 0) AS m2,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 3 THEN 1 ELSE 0 END), 0) AS m3,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level = 4 THEN 1 ELSE 0 END), 0) AS m4,
-			COALESCE(SUM(CASE WHEN l.known = 0 AND l.mastery_level >= 5 THEN 1 ELSE 0 END), 0) AS m5
-		FROM books b
-		LEFT JOIN book_lexemes bl ON bl.book_id = b.id
-		LEFT JOIN lexemes l ON l.id = bl.lexeme_id
+	b, err := scanBook(s.db.QueryRow(bookSelectSQL+`
 		WHERE b.id = ?
 		GROUP BY b.id
-	`, bookID).Scan(
-		&b.ID, &b.Title, &b.Author, &b.Filename, &b.FileSize, &b.SHA256, &b.ImportedAt,
-		&b.TotalLexemes, &b.KnownCount, &b.MasteredCount,
-		&m0, &m1, &m2, &m3, &m4, &m5,
-	)
+	`, bookID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrBookNotFound
 	}
 	if err != nil {
 		return nil, err
-	}
-	b.MasteryCounts = map[string]int{
-		"0": m0,
-		"1": m1,
-		"2": m2,
-		"3": m3,
-		"4": m4,
-		"5": m5,
 	}
 	return &b, nil
 }
@@ -1238,24 +1229,9 @@ func (s *Store) SelectQuizCandidates(bookID int64, size int) (QuizSession, error
 			FROM book_lexemes
 			GROUP BY lexeme_id
 		),
-		-- Due Date (local calendar day): last quiz day + interval, where the
-		-- interval is 0 days at Mastery Level 0 and 2^(level-1) days above it.
-		-- NULL means New (never quizzed). A level > 0 with no quiz timestamp
-		-- (legacy data) is Due today. The exponent is clamped only to keep the
-		-- date within SQLite's range; real levels never get near it.
 		due AS (
-			SELECT
-				id,
-				CASE
-					WHEN last_quizzed_at IS NULL AND mastery_level = 0 THEN NULL
-					WHEN last_quizzed_at IS NULL THEN date('now', 'localtime')
-					ELSE date(
-						last_quizzed_at, 'localtime',
-						'+' || (CASE WHEN mastery_level = 0 THEN 0
-							ELSE (1 << min(mastery_level - 1, 20)) END) || ' days'
-					)
-				END AS due_date
-			FROM lexemes
+			SELECT l.id, `+dueDateSQL+` AS due_date
+			FROM lexemes l
 		),
 		sched AS (
 			SELECT

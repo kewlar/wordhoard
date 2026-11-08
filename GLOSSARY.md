@@ -59,7 +59,8 @@ One of three mutually exclusive scheduling states of a **Lexeme** not marked **K
 - **Due**: quizzed before, and its **Due Date** is today or earlier (a just-failed **Lexeme** is Due immediately)
 - **New**: never quizzed
 - **Not Due**: quizzed before, and its **Due Date** is in the future
-_Avoid_: Unseen (a **Lexeme Status** meaning Mastery Level 0, which includes failed Lexemes)
+
+**New** coincides with the **Unseen** **Lexeme Status**; **Due** and **Not Due** each span both **Learning** and **Mastered** Lexemes.
 
 **Attempt Correction**:
 The re-scoring of an incorrect first attempt in a **Quiz** as correct, after the user edits the **Lexeme** on the reveal card so that their submitted answer now matches; the **Mastery Level** is recomputed from its value before that attempt.
@@ -69,11 +70,11 @@ _Avoid_: Override, fix-up
 A manual override on a **Lexeme** indicating the user already knows (or wants to ignore) it, excluding it from future quizzes across all books.
 
 **Lexeme Status**:
-One of four mutually exclusive learning states derived from **Known Status** and **Mastery Level** used for filtering in the vocabulary browser:
-- **Unseen**: `known = false` and `mastery_level = 0`
-- **Learning**: `known = false` and `mastery_level` in `1..4`
-- **Mastered**: `known = false` and `mastery_level >= 5` (still quizzed when Due)
-- **Known**: `known = true`
+One of four mutually exclusive learning states derived from **Known Status**, quiz history, and **Mastery Level**, used for filtering in the vocabulary browser and in a **Book**'s lexeme counts:
+- **Unseen**: not **Known** and never quizzed (the **Lexeme Status** counterpart of the **New** **Review State**)
+- **Learning**: not **Known**, quizzed at least once, and **Mastery Level** below `5` (includes failed Lexemes back at level `0`)
+- **Mastered**: not **Known** and **Mastery Level** `5` or higher (still quizzed when Due)
+- **Known**: marked **Known**
 
 **Quiz**:
 A keyboard-first interactive training session for a specific **Book** held in frontend state that selects a fixed-size batch (default 20) of **Lexemes** not marked **Known**, ordered by **Review State**: Due first (most overdue first), then New (most obscure first), then Not Due (soonest **Due Date** first). It presents each **Lexeme** one at a time as its bare **Lemma** labelled with its Part of Speech. Incorrectly answered lexemes are moved to the back of the session queue and repeated until every selected lexeme has been answered correctly at least once in that session.

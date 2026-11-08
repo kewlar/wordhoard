@@ -9,7 +9,10 @@ export interface BookSummary {
   total_lexemes: number;
   known_count: number;
   mastered_count: number;
-  mastery_distribution: Record<string, number>;
+  learning_count: number;
+  /** Learning lexemes whose Due Date is today or earlier. */
+  due_count: number;
+  unseen_count: number;
 }
 
 export interface Excerpt {
