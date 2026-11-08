@@ -506,7 +506,7 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		}
 	}
 
-	// 2. POST /api/books/1/quiz excludes known lexemes ('ephemeral') and orders by mastery_level ASC, cooldown, obscurity_score DESC
+	// 2. POST /api/books/1/quiz excludes known lexemes ('ephemeral'); both remaining lexemes are New, ordered by obscurity_score DESC
 	quizResp1, err := http.Post(ts.URL+"/api/books/1/quiz", "application/json", strings.NewReader(`{"size":20}`))
 	if err != nil {
 		t.Fatalf("POST /api/books/1/quiz: %v", err)
@@ -533,8 +533,8 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		t.Errorf("expected quiz item to include excerpts, got 0")
 	}
 
-	// 3. POST /api/lexemes/:id/attempt with first_attempt_correct: false keeps mastery_level = 0 but updates last_quizzed_at
-	// Because laconic was just quizzed (inside cooldown window), conundrum (never quizzed, mastery_level=0) should now come BEFORE laconic!
+	// 3. POST /api/lexemes/:id/attempt with first_attempt_correct: false keeps mastery_level = 0 but updates last_quizzed_at.
+	// A failed lexeme is Due right away, so laconic (Due) stays ahead of conundrum (New).
 	attemptFalseResp, err := http.Post(
 		fmt.Sprintf("%s/api/lexemes/%d/attempt", ts.URL, laconicID),
 		"application/json",
@@ -550,7 +550,7 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 
 	quizResp2, err := http.Post(ts.URL+"/api/books/1/quiz", "application/json", nil)
 	if err != nil {
-		t.Fatalf("POST /api/books/1/quiz (after cooldown): %v", err)
+		t.Fatalf("POST /api/books/1/quiz (after failed attempt): %v", err)
 	}
 	defer quizResp2.Body.Close()
 	var quizData2 struct {
@@ -559,8 +559,8 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 	if err := json.NewDecoder(quizResp2.Body).Decode(&quizData2); err != nil {
 		t.Fatalf("decode quizData2: %v", err)
 	}
-	if len(quizData2.Items) != 2 || quizData2.Items[0].ID != conundrumID || quizData2.Items[1].ID != laconicID {
-		t.Errorf("expected cooldown priority to order [conundrum, laconic], got [%s, %s]",
+	if len(quizData2.Items) != 2 || quizData2.Items[0].ID != laconicID || quizData2.Items[1].ID != conundrumID {
+		t.Errorf("expected Due before New to order [laconic, conundrum], got [%s, %s]",
 			quizData2.Items[0].Lemma, quizData2.Items[1].Lemma)
 	}
 
@@ -589,7 +589,7 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		}
 	}
 
-	// Now laconic (mastery_level=0) has lower mastery_level than conundrum (mastery_level=2), so laconic is prioritized first!
+	// Now laconic (failed, Due) comes before conundrum (mastery_level=2, quizzed today, Not Due until in 2 days).
 	quizResp3, err := http.Post(ts.URL+"/api/books/1/quiz", "application/json", nil)
 	if err != nil {
 		t.Fatalf("POST /api/books/1/quiz (mastery ordering): %v", err)
@@ -602,7 +602,7 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		t.Fatalf("decode quizData3: %v", err)
 	}
 	if quizData3.Items[0].ID != laconicID || quizData3.Items[1].ID != conundrumID {
-		t.Errorf("expected mastery_level ASC to order [laconic(0), conundrum(2)], got [%s(%d), %s(%d)]",
+		t.Errorf("expected Due before Not Due to order [laconic(0), conundrum(2)], got [%s(%d), %s(%d)]",
 			quizData3.Items[0].Lemma, quizData3.Items[0].MasteryLevel,
 			quizData3.Items[1].Lemma, quizData3.Items[1].MasteryLevel)
 	}
@@ -625,7 +625,7 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		t.Fatalf("expected mastery_level reset to 0, got %d", resetData.MasteryLevel)
 	}
 
-	// 5. Reaching mastery_level = 5 (capped at 5) excludes the lexeme from future quizzes across all books
+	// 5. mastery_level has no upper cap: six correct first attempts take laconic to 6
 	for i := 0; i < 6; i++ {
 		resp, err := http.Post(
 			fmt.Sprintf("%s/api/lexemes/%d/attempt", ts.URL, laconicID),
@@ -641,16 +641,13 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&res)
 		resp.Body.Close()
 		expected := i + 1
-		if expected > 5 {
-			expected = 5
-		}
 		if res.MasteryLevel != expected {
 			t.Fatalf("attempt %d: expected mastery_level=%d, got %d", i+1, expected, res.MasteryLevel)
 		}
 	}
 
 	// Set conundrum to learning (mastery_level = 2) so Book 1 has:
-	// - laconic: mastered (mastery_level = 5, known = false)
+	// - laconic: mastered (mastery_level = 6, known = false)
 	// - conundrum: learning (mastery_level = 2, known = false)
 	// - ephemeral: known (mastery_level = 0, known = true)
 	for i := 0; i < 2; i++ {
@@ -719,8 +716,9 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 	assertVocabLemmas("statuses=unseen", []string{"conundrum"})
 	assertVocabLemmas("statuses=unseen,mastered", []string{"laconic", "conundrum"})
 
-	// Now laconic is mastered (5) globally: Book 2 has only 'laconic' (mastered=5) and 'ephemeral' (known=true),
-	// so POST /api/books/2/quiz returns 0 unmastered items, and Book 2 has mastered_count=1, known_count=1!
+	// Now laconic is mastered (6) globally: Book 2 has only 'laconic' (mastered) and 'ephemeral' (known=true).
+	// Mastered lexemes stay quizzable (only Known ones are excluded), so Book 2's quiz returns just laconic,
+	// and Book 2 has mastered_count=1, known_count=1.
 	book2QuizResp, err := http.Post(ts.URL+"/api/books/2/quiz", "application/json", nil)
 	if err != nil {
 		t.Fatalf("POST /api/books/2/quiz: %v", err)
@@ -733,8 +731,8 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 	if err := json.NewDecoder(book2QuizResp.Body).Decode(&book2QuizData); err != nil {
 		t.Fatalf("decode book2QuizData: %v", err)
 	}
-	if len(book2QuizData.Items) != 0 {
-		t.Errorf("expected 0 unmastered items in Book 2 quiz, got %d", len(book2QuizData.Items))
+	if len(book2QuizData.Items) != 1 || book2QuizData.Items[0].ID != laconicID {
+		t.Errorf("expected Book 2 quiz to contain only laconic (mastered, not known), got %+v", book2QuizData.Items)
 	}
 	if book2QuizData.Book == nil || book2QuizData.Book.MasteredCount != 1 || book2QuizData.Book.KnownCount != 1 {
 		t.Errorf("expected Book 2 mastered_count=1 known_count=1, got %+v", book2QuizData.Book)

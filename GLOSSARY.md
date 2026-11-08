@@ -48,7 +48,18 @@ The origin tier (`offline`, `online`, or `user`) of a **Lexeme**'s definitions a
 A compound metric assigned to each **Lexeme** within a **Book**, combining its global rarity in English with its library-wide inverse document frequency and its occurrence count in the book. Used to order a book's vocabulary list from most obscure to most common.
 
 **Mastery Level**:
-A global, per-**Lexeme** integer level (`0..5`) tracking how well the user knows that **Lexeme** across all books. Committed immediately to the backend on the user's **first attempt** at a lexeme in a **Quiz**: incremented by `1` on a correct first attempt, and reset to `0` on an incorrect or skipped first attempt, unless later replaced by an **Attempt Correction**.
+A global, per-**Lexeme** integer level (`0` or higher, with no upper limit) tracking how well the user knows that **Lexeme** across all books, and setting the interval to its next **Due Date**. Committed immediately to the backend on the user's **first attempt** at a lexeme in a **Quiz**: incremented by `1` on a correct first attempt, and reset to `0` on an incorrect or skipped first attempt, unless later replaced by an **Attempt Correction**.
+
+**Due Date**:
+The local calendar day on which a quizzed **Lexeme** is due for review again: the day of its last first attempt in a **Quiz**, plus an interval that doubles with each **Mastery Level** (0 days at level 0, then 1, 2, 4, 8, 16, … days). A **Lexeme** that has never been quizzed has no Due Date.
+_Avoid_: Review date, next review
+
+**Review State**:
+One of three mutually exclusive scheduling states of a **Lexeme** not marked **Known**, derived from its **Due Date** and used to order **Quiz** selection:
+- **Due**: quizzed before, and its **Due Date** is today or earlier (a just-failed **Lexeme** is Due immediately)
+- **New**: never quizzed
+- **Not Due**: quizzed before, and its **Due Date** is in the future
+_Avoid_: Unseen (a **Lexeme Status** meaning Mastery Level 0, which includes failed Lexemes)
 
 **Attempt Correction**:
 The re-scoring of an incorrect first attempt in a **Quiz** as correct, after the user edits the **Lexeme** on the reveal card so that their submitted answer now matches; the **Mastery Level** is recomputed from its value before that attempt.
@@ -61,8 +72,8 @@ A manual override on a **Lexeme** indicating the user already knows (or wants to
 One of four mutually exclusive learning states derived from **Known Status** and **Mastery Level** used for filtering in the vocabulary browser:
 - **Unseen**: `known = false` and `mastery_level = 0`
 - **Learning**: `known = false` and `mastery_level` in `1..4`
-- **Mastered**: `known = false` and `mastery_level = 5`
+- **Mastered**: `known = false` and `mastery_level >= 5` (still quizzed when Due)
 - **Known**: `known = true`
 
 **Quiz**:
-A keyboard-first interactive training session for a specific **Book** held in frontend state that selects a fixed-size batch (default 20) of unmastered **Lexemes** prioritized by **Mastery Level** and **Obscurity Score**, presenting each **Lexeme** one at a time as its bare **Lemma** labelled with its Part of Speech. Incorrectly answered lexemes are moved to the back of the session queue and repeated until every selected lexeme has been answered correctly at least once in that session.
+A keyboard-first interactive training session for a specific **Book** held in frontend state that selects a fixed-size batch (default 20) of **Lexemes** not marked **Known**, ordered by **Review State**: Due first (most overdue first), then New (most obscure first), then Not Due (soonest **Due Date** first). It presents each **Lexeme** one at a time as its bare **Lemma** labelled with its Part of Speech. Incorrectly answered lexemes are moved to the back of the session queue and repeated until every selected lexeme has been answered correctly at least once in that session.

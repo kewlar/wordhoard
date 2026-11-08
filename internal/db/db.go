@@ -1179,7 +1179,7 @@ func (s *Store) UpdateLexeme(lexemeID int64, known *bool) (*LexemeProgress, erro
 }
 
 // RecordLexemeAttempt commits the Mastery Level transition for a first
-// attempt: +1 (capped at 5) when correct, reset to 0 otherwise. The level
+// attempt: +1 (no upper cap) when correct, reset to 0 otherwise. The level
 // before the transition is remembered so that a later correction (the user
 // edits the lexeme on the reveal card and the wrong answer now matches) can
 // replace the transition with pre-attempt level +1 instead of 0 + 1.
@@ -1204,7 +1204,7 @@ func (s *Store) RecordLexemeAttempt(lexemeID int64, firstAttemptCorrect, correct
 
 	newMastery := 0
 	if firstAttemptCorrect {
-		newMastery = min(baseLevel+1, 5)
+		newMastery = baseLevel + 1
 	}
 
 	if _, err := s.db.Exec(
@@ -1237,6 +1237,37 @@ func (s *Store) SelectQuizCandidates(bookID int64, size int) (QuizSession, error
 			SELECT lexeme_id, COUNT(*) AS books_with_lexeme
 			FROM book_lexemes
 			GROUP BY lexeme_id
+		),
+		-- Due Date (local calendar day): last quiz day + interval, where the
+		-- interval is 0 days at Mastery Level 0 and 2^(level-1) days above it.
+		-- NULL means New (never quizzed). A level > 0 with no quiz timestamp
+		-- (legacy data) is Due today. The exponent is clamped only to keep the
+		-- date within SQLite's range; real levels never get near it.
+		due AS (
+			SELECT
+				id,
+				CASE
+					WHEN last_quizzed_at IS NULL AND mastery_level = 0 THEN NULL
+					WHEN last_quizzed_at IS NULL THEN date('now', 'localtime')
+					ELSE date(
+						last_quizzed_at, 'localtime',
+						'+' || (CASE WHEN mastery_level = 0 THEN 0
+							ELSE (1 << min(mastery_level - 1, 20)) END) || ' days'
+					)
+				END AS due_date
+			FROM lexemes
+		),
+		sched AS (
+			SELECT
+				id,
+				due_date,
+				-- 0 = Due, 1 = New, 2 = Not Due
+				CASE
+					WHEN due_date IS NULL THEN 1
+					WHEN due_date <= date('now', 'localtime') THEN 0
+					ELSE 2
+				END AS sched_group
+			FROM due
 		)
 		SELECT
 			l.id,
@@ -1263,16 +1294,14 @@ func (s *Store) SelectQuizCandidates(bookID int64, size int) (QuizSession, error
 		FROM book_lexemes bl
 		JOIN lexemes l ON l.id = bl.lexeme_id
 		JOIN lc ON lc.lexeme_id = l.id
+		JOIN sched s ON s.id = l.id
 		CROSS JOIN tb
-		WHERE bl.book_id = ? AND l.known = 0 AND l.mastery_level < 5
+		WHERE bl.book_id = ? AND l.known = 0
 		ORDER BY
-			l.mastery_level ASC,
-			CASE
-				WHEN l.last_quizzed_at IS NULL OR datetime(l.last_quizzed_at) <= datetime('now', '-15 minutes') THEN 0
-				ELSE 1
-			END ASC,
+			s.sched_group ASC,
+			s.due_date ASC,
+			CASE WHEN s.sched_group = 0 THEN l.mastery_level ELSE 0 END ASC,
 			obscurity_score DESC,
-			COALESCE(l.last_quizzed_at, '') ASC,
 			l.lemma ASC,
 			l.pos ASC
 		LIMIT ?
