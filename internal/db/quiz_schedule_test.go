@@ -39,21 +39,23 @@ func TestSelectQuizCandidatesOrdersDueThenNewThenNotDue(t *testing.T) {
 	}
 	days := func(n int) *int { return &n }
 	lexemes := []lex{
-		// Not Due: level 6 → 32-day interval, quizzed today.
+		// Not Due: level 6 → 64-day interval, quizzed today.
 		{lemma: "notduelater", zipf: 1.0, mastery: 6, quizzedAgo: days(0)},
-		// Not Due: level 1 → 1-day interval, quizzed today → due tomorrow.
+		// Not Due: level 1 → 2-day interval, quizzed today → due in 2 days.
 		{lemma: "notduesoon", zipf: 1.0, mastery: 1, quizzedAgo: days(0)},
+		// Not Due: failed today → level 0 → 1-day interval → due tomorrow.
+		{lemma: "failed", zipf: 4.0, mastery: 0, quizzedAgo: days(0)},
 		// New: never quizzed; ordered by obscurity.
 		{lemma: "newcommon", zipf: 4.0, mastery: 0},
 		{lemma: "newrare", zipf: 1.0, mastery: 0},
 		// Due today, tie on Due Date → lowest Mastery Level first.
-		{lemma: "legacy", zipf: 1.0, mastery: 3},                           // level > 0, never quizzed → Due now
-		{lemma: "duelevelone", zipf: 1.0, mastery: 1, quizzedAgo: days(1)}, // 1-day interval
-		{lemma: "failed", zipf: 4.0, mastery: 0, quizzedAgo: days(0)},      // 0-day interval
-		// Overdue: level 2 → 2-day interval, quizzed 5 days ago → due 3 days ago.
-		{lemma: "overdue", zipf: 1.0, mastery: 2, quizzedAgo: days(5)},
-		// Most overdue, and above the old cap: level 5 → 16 days, quizzed 20 days ago.
-		{lemma: "mastereddue", zipf: 4.0, mastery: 5, quizzedAgo: days(20)},
+		{lemma: "legacy", zipf: 1.0, mastery: 3},                            // level > 0, never quizzed → Due now
+		{lemma: "duelevelone", zipf: 1.0, mastery: 1, quizzedAgo: days(2)},  // 2-day interval
+		{lemma: "duelevelzero", zipf: 4.0, mastery: 0, quizzedAgo: days(1)}, // 1-day interval
+		// Overdue: level 2 → 4-day interval, quizzed 7 days ago → due 3 days ago.
+		{lemma: "overdue", zipf: 1.0, mastery: 2, quizzedAgo: days(7)},
+		// Most overdue, and above the old cap: level 5 → 32 days, quizzed 40 days ago.
+		{lemma: "mastereddue", zipf: 4.0, mastery: 5, quizzedAgo: days(40)},
 		// Known lexemes are never quizzed.
 		{lemma: "knownword", zipf: 1.0, mastery: 0, known: true},
 	}
@@ -90,9 +92,9 @@ func TestSelectQuizCandidatesOrdersDueThenNewThenNotDue(t *testing.T) {
 		t.Fatalf("SelectQuizCandidates: %v", err)
 	}
 	want := []string{
-		"mastereddue", "overdue", "failed", "duelevelone", "legacy", // Due
+		"mastereddue", "overdue", "duelevelzero", "duelevelone", "legacy", // Due
 		"newrare", "newcommon", // New
-		"notduesoon", "notduelater", // Not Due
+		"failed", "notduesoon", "notduelater", // Not Due
 	}
 	got := make([]string, 0, len(session.Items))
 	for _, it := range session.Items {
