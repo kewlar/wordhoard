@@ -51,14 +51,14 @@ A compound metric assigned to each **Lexeme** within a **Book**, combining its g
 A global, per-**Lexeme** integer level (`0` or higher, with no upper limit) tracking how well the user knows that **Lexeme** across all books, and setting the interval to its next **Due Date**. Committed immediately to the backend on the user's **first attempt** at a lexeme in a **Quiz**: incremented by `1` on a correct first attempt, and reset to `0` on an incorrect or skipped first attempt, unless later replaced by an **Attempt Correction**.
 
 **Due Date**:
-The local calendar day on which a quizzed **Lexeme** is due for review again: the day of its last first attempt in a **Quiz**, plus an interval that doubles with each **Mastery Level** (0 days at level 0, then 1, 2, 4, 8, 16, … days). A **Lexeme** that has never been quizzed has no Due Date.
+The local calendar day on which a quizzed **Lexeme** is due for review again: the day of its last first attempt in a **Quiz**, plus an interval that doubles with each **Mastery Level** (1 day at level 0, then 2, 4, 8, 16, … days). A **Lexeme** that has never been quizzed has no Due Date.
 _Avoid_: Review date, next review
 
 **Review State**:
 One of three mutually exclusive scheduling states of a **Lexeme** not marked **Known**, derived from its **Due Date** and used to order **Quiz** selection:
-- **Due**: quizzed before, and its **Due Date** is today or earlier (a just-failed **Lexeme** is Due immediately)
+- **Due**: quizzed before, and its **Due Date** is today or earlier
 - **New**: never quizzed
-- **Not Due**: quizzed before, and its **Due Date** is in the future
+- **Not Due**: quizzed before, and its **Due Date** is in the future (a just-failed **Lexeme** is Not Due until the next day)
 
 **New** coincides with the **Unseen** **Lexeme Status**; **Due** and **Not Due** each span both **Learning** and **Mastered** Lexemes.
 

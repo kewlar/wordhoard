@@ -54,16 +54,16 @@ func statusLexemes() []statusLex {
 	return []statusLex{
 		// Unseen: never quizzed.
 		{lemma: "fresh", mastery: 0},
-		// Learning, Due: failed today (level 0, 0-day interval).
+		// Learning, Not Due: failed today (level 0, 1-day interval → due tomorrow).
 		{lemma: "failed", mastery: 0, quizzedAgo: days(0)},
-		// Learning, Due: level 2 → 2-day interval, quizzed 5 days ago.
+		// Learning, Due: level 2 → 4-day interval, quizzed 5 days ago.
 		{lemma: "overdue", mastery: 2, quizzedAgo: days(5)},
 		// Learning, Due: level > 0 but never quizzed (legacy) → Due today.
 		{lemma: "legacy", mastery: 3},
-		// Learning, Not Due: level 4 → 8-day interval, quizzed today.
+		// Learning, Not Due: level 4 → 16-day interval, quizzed today.
 		{lemma: "pending", mastery: 4, quizzedAgo: days(0)},
-		// Mastered and Due: not counted as due review.
-		{lemma: "mastereddue", mastery: 5, quizzedAgo: days(20)},
+		// Mastered and Due (level 5 → 32-day interval): not counted as due review.
+		{lemma: "mastereddue", mastery: 5, quizzedAgo: days(40)},
 		// Mastered, Not Due.
 		{lemma: "masteredlater", mastery: 6, quizzedAgo: days(0)},
 		// Known, regardless of history.
@@ -78,7 +78,7 @@ func TestBookLexemeCountsFollowLexemeStatus(t *testing.T) {
 	check := func(name string, b db.Book) {
 		t.Helper()
 		got := [6]int{b.TotalLexemes, b.KnownCount, b.MasteredCount, b.LearningCount, b.DueCount, b.UnseenCount}
-		want := [6]int{9, 2, 2, 4, 3, 1}
+		want := [6]int{9, 2, 2, 4, 2, 1}
 		if got != want {
 			t.Errorf("%s: [total known mastered learning due unseen] = %v, want %v", name, got, want)
 		}

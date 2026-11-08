@@ -534,7 +534,7 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 	}
 
 	// 3. POST /api/lexemes/:id/attempt with first_attempt_correct: false keeps mastery_level = 0 but updates last_quizzed_at.
-	// A failed lexeme is Due right away, so laconic (Due) stays ahead of conundrum (New).
+	// A failed lexeme is Not Due until tomorrow, so conundrum (New) moves ahead of laconic (Not Due).
 	attemptFalseResp, err := http.Post(
 		fmt.Sprintf("%s/api/lexemes/%d/attempt", ts.URL, laconicID),
 		"application/json",
@@ -559,8 +559,8 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 	if err := json.NewDecoder(quizResp2.Body).Decode(&quizData2); err != nil {
 		t.Fatalf("decode quizData2: %v", err)
 	}
-	if len(quizData2.Items) != 2 || quizData2.Items[0].ID != laconicID || quizData2.Items[1].ID != conundrumID {
-		t.Errorf("expected Due before New to order [laconic, conundrum], got [%s, %s]",
+	if len(quizData2.Items) != 2 || quizData2.Items[0].ID != conundrumID || quizData2.Items[1].ID != laconicID {
+		t.Errorf("expected New before Not Due to order [conundrum, laconic], got [%s, %s]",
 			quizData2.Items[0].Lemma, quizData2.Items[1].Lemma)
 	}
 
@@ -589,7 +589,8 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		}
 	}
 
-	// Now laconic (failed, Due) comes before conundrum (mastery_level=2, quizzed today, Not Due until in 2 days).
+	// Both are Not Due, soonest Due Date first: laconic (failed, due tomorrow) before
+	// conundrum (mastery_level=2, quizzed today, due in 4 days).
 	quizResp3, err := http.Post(ts.URL+"/api/books/1/quiz", "application/json", nil)
 	if err != nil {
 		t.Fatalf("POST /api/books/1/quiz (mastery ordering): %v", err)
@@ -602,7 +603,7 @@ func TestKnownStatusMasteryTrackingAndQuizEndpoints(t *testing.T) {
 		t.Fatalf("decode quizData3: %v", err)
 	}
 	if quizData3.Items[0].ID != laconicID || quizData3.Items[1].ID != conundrumID {
-		t.Errorf("expected Due before Not Due to order [laconic(0), conundrum(2)], got [%s(%d), %s(%d)]",
+		t.Errorf("expected soonest Due Date first to order [laconic(0), conundrum(2)], got [%s(%d), %s(%d)]",
 			quizData3.Items[0].Lemma, quizData3.Items[0].MasteryLevel,
 			quizData3.Items[1].Lemma, quizData3.Items[1].MasteryLevel)
 	}

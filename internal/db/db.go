@@ -107,18 +107,17 @@ type VocabularyFilter struct {
 }
 
 // dueDateSQL is a lexeme's Due Date (GLOSSARY) as a local calendar day, over
-// lexemes aliased as l: last quiz day + an interval of 0 days at Mastery
-// Level 0 and 2^(level-1) days above it. NULL means New (never quizzed). A
-// level > 0 with no quiz timestamp (legacy data) is Due today. The exponent is
-// clamped only to keep the date within SQLite's range; real levels never get
-// near it.
+// lexemes aliased as l: last quiz day + an interval of 2^level days (1 day at
+// Mastery Level 0, so a failed lexeme is Due the next day). NULL means New
+// (never quizzed). A level > 0 with no quiz timestamp (legacy data) is Due
+// today. The exponent is clamped only to keep the date within SQLite's range;
+// real levels never get near it.
 const dueDateSQL = `(CASE
 	WHEN l.last_quizzed_at IS NULL AND l.mastery_level = 0 THEN NULL
 	WHEN l.last_quizzed_at IS NULL THEN date('now', 'localtime')
 	ELSE date(
 		l.last_quizzed_at, 'localtime',
-		'+' || (CASE WHEN l.mastery_level = 0 THEN 0
-			ELSE (1 << min(l.mastery_level - 1, 20)) END) || ' days'
+		'+' || (1 << min(l.mastery_level, 20)) || ' days'
 	)
 END)`
 
